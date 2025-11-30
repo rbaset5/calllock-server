@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: calllock-server
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RETELL_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CAL_COM_API_KEY
+        sync: false
+      - key: BUSINESS_NAME
+        value: ACE Cooling
+      - key: SERVICE_TYPES
+        value: HVAC,Plumbing,Electrical
+      - key: SERVICE_AREA
+        value: Austin and surrounding areas within 30 miles
+      - key: BUSINESS_PHONE
+        value: +15125551234
+      - key: SERVICE_AREA_ZIPS
+        value: 78701,78702,78703,78704,78705,78721,78722,78723,78724,78725
