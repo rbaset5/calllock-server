@@ -265,8 +265,18 @@ app.listen(PORT, () => {
   console.log(`CallLock Retell WebSocket Server running on port ${PORT}`);
   console.log(`WebSocket endpoint: ws://localhost:${PORT}/llm-websocket`);
   console.log(`Health check: http://localhost:${PORT}/health`);
-  console.log("");
-  console.log("For production, use ngrok or deploy to get a public URL:");
-  console.log("  ngrok http " + PORT);
-  console.log("  Then use: wss://YOUR_NGROK_URL/llm-websocket");
+
+  // Keep-alive ping for Render free tier (prevents spin-down)
+  const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
+  if (RENDER_URL) {
+    console.log(`[Keep-alive] Enabled for ${RENDER_URL}`);
+    setInterval(async () => {
+      try {
+        await fetch(`${RENDER_URL}/health`);
+        console.log("[Keep-alive] Ping successful");
+      } catch (e) {
+        console.log("[Keep-alive] Ping failed");
+      }
+    }, 14 * 60 * 1000); // Every 14 minutes
+  }
 });
