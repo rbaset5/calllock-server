@@ -28,8 +28,10 @@ TIER 2 URGENT (no heat <40°F, no AC >100°F, especially with elderly/children):
 → Confirm callback number, call sendEmergencyAlert, call endCall(urgent_escalation)
 
 ROUTINE (all other issues):
-→ Get address and phone number
-→ Call checkCalendarAvailability, offer times
+→ Get address and phone number (confirm by repeating back)
+→ Extract ZIP from address, call validateServiceArea
+→ If outside service area → "Sorry, we don't currently service that area. We serve ${SERVICE_AREA}." → call endCall(out_of_area)
+→ If in service area → Call checkCalendarAvailability, offer times
 → Call bookAppointment when they choose
 → Confirm details, call endCall(completed)
 

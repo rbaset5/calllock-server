@@ -3,6 +3,11 @@
  * Handles booking lookup, cancellation, and rescheduling
  */
 
+import { createModuleLogger, maskPhone } from "../utils/logger.js";
+import { fetchWithRetry, FetchError } from "../utils/fetch.js";
+
+const log = createModuleLogger("calcom");
+
 const CAL_COM_API_KEY = process.env.CAL_COM_API_KEY;
 const CAL_API_BASE = "https://api.cal.com/v2";
 
@@ -46,7 +51,7 @@ interface RescheduleResult {
  */
 export async function lookupBookingByPhone(phone: string): Promise<LookupResult> {
   if (!CAL_COM_API_KEY) {
-    console.error("[CalCom] API key not configured");
+    log.warn("API key not configured");
     return { found: false, message: "Calendar service not configured" };
   }
 
@@ -54,36 +59,45 @@ export async function lookupBookingByPhone(phone: string): Promise<LookupResult>
     // Normalize phone number (remove spaces, dashes, etc.)
     const normalizedPhone = phone.replace(/\D/g, "");
 
+    log.info({ phone: maskPhone(phone) }, "Looking up booking");
+
     // Get bookings from Cal.com
-    // Note: Cal.com v2 API uses different endpoints - adjust as needed
-    const response = await fetch(`${CAL_API_BASE}/bookings?status=upcoming`, {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${CAL_COM_API_KEY}`,
-        "cal-api-version": "2024-08-13",
-        "Content-Type": "application/json",
+    const response = await fetchWithRetry(
+      `${CAL_API_BASE}/bookings?status=upcoming`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${CAL_COM_API_KEY}`,
+          "cal-api-version": "2024-08-13",
+          "Content-Type": "application/json",
+        },
       },
-    });
+      { retries: 2, timeout: 10000 }
+    );
 
     if (!response.ok) {
       const error = await response.text();
-      console.error("[CalCom] API error:", response.status, error);
+      log.error({ status: response.status, error }, "API error during lookup");
       return { found: false, message: "Unable to check bookings at this time" };
     }
 
-    const data = await response.json() as { data?: CalBooking[] };
+    const data = (await response.json()) as { data?: CalBooking[] };
     const bookings: CalBooking[] = data.data || [];
 
     // Find booking matching this phone number
     const matchingBooking = bookings.find((booking) => {
       return booking.attendees?.some((attendee) => {
         const attendeePhone = attendee.phone?.replace(/\D/g, "") || "";
-        return attendeePhone.includes(normalizedPhone) || normalizedPhone.includes(attendeePhone);
+        return (
+          attendeePhone.includes(normalizedPhone) ||
+          normalizedPhone.includes(attendeePhone)
+        );
       });
     });
 
     if (matchingBooking) {
       const startDate = new Date(matchingBooking.start);
+      log.info({ bookingUid: matchingBooking.uid }, "Booking found");
       return {
         found: true,
         booking: {
@@ -104,12 +118,17 @@ export async function lookupBookingByPhone(phone: string): Promise<LookupResult>
       };
     }
 
+    log.info({ phone: maskPhone(phone) }, "No booking found");
     return {
       found: false,
       message: "No upcoming appointment found for this phone number",
     };
   } catch (error) {
-    console.error("[CalCom] Lookup error:", error);
+    if (error instanceof FetchError) {
+      log.error({ error: error.message, attempts: error.attempts }, "Lookup failed after retries");
+    } else {
+      log.error({ error }, "Lookup error");
+    }
     return { found: false, message: "Error looking up booking" };
   }
 }
@@ -122,35 +141,46 @@ export async function cancelBooking(
   reason?: string
 ): Promise<CancelResult> {
   if (!CAL_COM_API_KEY) {
-    console.error("[CalCom] API key not configured");
+    log.warn("API key not configured");
     return { success: false, message: "Calendar service not configured" };
   }
 
   try {
-    const response = await fetch(`${CAL_API_BASE}/bookings/${bookingUid}/cancel`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${CAL_COM_API_KEY}`,
-        "cal-api-version": "2024-08-13",
-        "Content-Type": "application/json",
+    log.info({ bookingUid }, "Cancelling booking");
+
+    const response = await fetchWithRetry(
+      `${CAL_API_BASE}/bookings/${bookingUid}/cancel`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${CAL_COM_API_KEY}`,
+          "cal-api-version": "2024-08-13",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          cancellationReason: reason || "Cancelled via phone",
+        }),
       },
-      body: JSON.stringify({
-        cancellationReason: reason || "Cancelled via phone",
-      }),
-    });
+      { retries: 2, timeout: 10000 }
+    );
 
     if (!response.ok) {
       const error = await response.text();
-      console.error("[CalCom] Cancel error:", response.status, error);
+      log.error({ status: response.status, error, bookingUid }, "Cancel API error");
       return { success: false, message: "Unable to cancel booking" };
     }
 
+    log.info({ bookingUid }, "Booking cancelled successfully");
     return {
       success: true,
       message: "Your appointment has been cancelled successfully",
     };
   } catch (error) {
-    console.error("[CalCom] Cancel error:", error);
+    if (error instanceof FetchError) {
+      log.error({ error: error.message, attempts: error.attempts, bookingUid }, "Cancel failed after retries");
+    } else {
+      log.error({ error, bookingUid }, "Cancel error");
+    }
     return { success: false, message: "Error cancelling booking" };
   }
 }
@@ -163,26 +193,32 @@ export async function rescheduleBooking(
   newStartTime: string
 ): Promise<RescheduleResult> {
   if (!CAL_COM_API_KEY) {
-    console.error("[CalCom] API key not configured");
+    log.warn("API key not configured");
     return { success: false, message: "Calendar service not configured" };
   }
 
   try {
-    const response = await fetch(`${CAL_API_BASE}/bookings/${bookingUid}/reschedule`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${CAL_COM_API_KEY}`,
-        "cal-api-version": "2024-08-13",
-        "Content-Type": "application/json",
+    log.info({ bookingUid, newStartTime }, "Rescheduling booking");
+
+    const response = await fetchWithRetry(
+      `${CAL_API_BASE}/bookings/${bookingUid}/reschedule`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${CAL_COM_API_KEY}`,
+          "cal-api-version": "2024-08-13",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          start: newStartTime,
+        }),
       },
-      body: JSON.stringify({
-        start: newStartTime,
-      }),
-    });
+      { retries: 2, timeout: 10000 }
+    );
 
     if (!response.ok) {
       const error = await response.text();
-      console.error("[CalCom] Reschedule error:", response.status, error);
+      log.error({ status: response.status, error, bookingUid }, "Reschedule API error");
       return { success: false, message: "Unable to reschedule booking" };
     }
 
@@ -198,13 +234,18 @@ export async function rescheduleBooking(
       hour12: true,
     });
 
+    log.info({ bookingUid, newStartTime }, "Booking rescheduled successfully");
     return {
       success: true,
       message: `Your appointment has been rescheduled to ${formattedDate} at ${formattedTime}`,
       newDateTime: newStartTime,
     };
   } catch (error) {
-    console.error("[CalCom] Reschedule error:", error);
+    if (error instanceof FetchError) {
+      log.error({ error: error.message, attempts: error.attempts, bookingUid }, "Reschedule failed after retries");
+    } else {
+      log.error({ error, bookingUid }, "Reschedule error");
+    }
     return { success: false, message: "Error rescheduling booking" };
   }
 }

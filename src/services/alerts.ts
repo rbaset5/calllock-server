@@ -4,6 +4,10 @@
  */
 
 import { EmergencyAlertParams, EmergencyAlertResult } from "../types/retell.js";
+import { createModuleLogger, maskPhone } from "../utils/logger.js";
+import { fetchWithRetry, FetchError } from "../utils/fetch.js";
+
+const log = createModuleLogger("alerts");
 
 // Twilio configuration (optional - falls back to console log if not configured)
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
@@ -15,7 +19,7 @@ const EMERGENCY_SMS_NUMBER = process.env.EMERGENCY_SMS_NUMBER;
  * Send an emergency SMS alert to the dispatcher/owner
  *
  * SMS format (punchy, no fluff):
- * 🚨 URGENT: No heat, elderly in home
+ * URGENT: No heat, elderly in home
  * Caller: (248) 555-1234
  * Address: 1234 Oak St, Milford
  * Promised callback within 15 min
@@ -27,33 +31,42 @@ export async function sendEmergencyAlert(
 
   // Format the SMS message
   const smsMessage = [
-    `🚨 URGENT: ${urgencyDescription}`,
+    `URGENT: ${urgencyDescription}`,
     `Caller: ${formatPhone(callerPhone)}`,
     `Address: ${address}`,
     `Promised callback within ${callbackMinutes} min`,
   ].join("\n");
 
-  console.log("[Alerts] Emergency alert triggered:", {
-    urgencyDescription,
-    callerPhone,
-    address,
-    callbackMinutes,
-  });
+  log.info(
+    {
+      urgencyDescription,
+      phone: maskPhone(callerPhone),
+      callbackMinutes,
+    },
+    "Emergency alert triggered"
+  );
 
   // If Twilio is configured, send real SMS
-  if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_FROM_NUMBER && EMERGENCY_SMS_NUMBER) {
+  if (
+    TWILIO_ACCOUNT_SID &&
+    TWILIO_AUTH_TOKEN &&
+    TWILIO_FROM_NUMBER &&
+    EMERGENCY_SMS_NUMBER
+  ) {
     try {
       const result = await sendTwilioSMS(EMERGENCY_SMS_NUMBER, smsMessage);
       return result;
     } catch (error) {
-      console.error("[Alerts] Twilio SMS failed:", error);
+      if (error instanceof FetchError) {
+        log.error({ error: error.message, attempts: error.attempts }, "Twilio SMS failed after retries");
+      } else {
+        log.error({ error }, "Twilio SMS failed");
+      }
       // Fall through to mock response
     }
   } else {
-    console.log("[Alerts] Twilio not configured. SMS that would be sent:");
-    console.log("---");
-    console.log(smsMessage);
-    console.log("---");
+    log.info("Twilio not configured - logging SMS instead");
+    log.info({ smsContent: smsMessage }, "SMS that would be sent");
   }
 
   // Return success (either real SMS sent or logged for demo)
@@ -74,28 +87,34 @@ async function sendTwilioSMS(
 ): Promise<EmergencyAlertResult> {
   const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Authorization": `Basic ${Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
+  log.info({ to: maskPhone(to) }, "Sending Twilio SMS");
+
+  const response = await fetchWithRetry(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        To: to,
+        From: TWILIO_FROM_NUMBER!,
+        Body: body,
+      }),
     },
-    body: new URLSearchParams({
-      To: to,
-      From: TWILIO_FROM_NUMBER!,
-      Body: body,
-    }),
-  });
+    { retries: 2, timeout: 15000 }
+  );
 
   if (!response.ok) {
     const error = await response.text();
-    console.error("[Alerts] Twilio API error:", response.status, error);
+    log.error({ status: response.status, error }, "Twilio API error");
     throw new Error(`Twilio error: ${response.status}`);
   }
 
-  const data = await response.json() as { sid: string };
+  const data = (await response.json()) as { sid: string };
 
-  console.log("[Alerts] SMS sent successfully:", data.sid);
+  log.info({ messageSid: data.sid }, "SMS sent successfully");
 
   return {
     success: true,

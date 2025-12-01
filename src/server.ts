@@ -2,6 +2,9 @@ import "dotenv/config";
 import express, { Request, Response } from "express";
 import expressWs from "express-ws";
 import { WebSocket } from "ws";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+
 import { CallLockLLM } from "./llm/claude.js";
 import {
   RetellRequest,
@@ -10,13 +13,24 @@ import {
   PingPongResponse,
   ResponseResponse,
   ConversationState,
-  TranscriptMessage,
 } from "./types/retell.js";
 import {
   lookupBookingByPhone,
   cancelBooking,
   rescheduleBooking,
 } from "./services/calcom.js";
+
+// Infrastructure imports
+import { logger, createCallLogger, maskPhone } from "./utils/logger.js";
+import { runHealthChecks } from "./utils/health.js";
+import { apiKeyAuth } from "./middleware/auth.js";
+import {
+  validate,
+  lookupRequestSchema,
+  cancelRequestSchema,
+  rescheduleRequestSchema,
+  phoneSchema,
+} from "./validation/schemas.js";
 
 // ===========================================
 // Startup Validation
@@ -27,7 +41,7 @@ function validateEnvironment(): void {
   const missing = required.filter((key) => !process.env[key]);
 
   if (missing.length > 0) {
-    console.error("❌ Missing required environment variables:", missing.join(", "));
+    logger.fatal({ missing }, "Missing required environment variables");
     process.exit(1);
   }
 
@@ -35,15 +49,20 @@ function validateEnvironment(): void {
   const recommended = ["RETELL_API_KEY", "BUSINESS_NAME", "SERVICE_AREA"];
   const missingRecommended = recommended.filter((key) => !process.env[key]);
   if (missingRecommended.length > 0) {
-    console.warn("⚠️  Missing recommended environment variables:", missingRecommended.join(", "));
+    logger.warn({ missing: missingRecommended }, "Missing recommended environment variables");
   }
 
   // Warn if emergency escalation is not configured
   if (!process.env.ON_CALL_PHONE_NUMBER && !process.env.EMERGENCY_SMS_NUMBER) {
-    console.warn("⚠️  No emergency escalation configured (ON_CALL_PHONE_NUMBER or EMERGENCY_SMS_NUMBER)");
+    logger.warn("No emergency escalation configured (ON_CALL_PHONE_NUMBER or EMERGENCY_SMS_NUMBER)");
   }
 
-  console.log("✅ Environment validation passed");
+  // Warn if API_SECRET_KEY not set (endpoints unprotected)
+  if (!process.env.API_SECRET_KEY) {
+    logger.warn("API_SECRET_KEY not set - REST endpoints are unprotected");
+  }
+
+  logger.info("Environment validation passed");
 }
 
 // Run validation before starting
@@ -52,88 +71,135 @@ validateEnvironment();
 const app = expressWs(express()).app;
 const PORT = process.env.PORT || 8080;
 
+// ===========================================
+// Security Middleware
+// ===========================================
+
+// Security headers
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // API only - no HTML
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
+// Request size limits
+app.use(express.json({ limit: "10kb" }));
+
+// Rate limiting for API endpoints
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // 100 requests per window per IP
+  message: { error: "Too many requests, please try again later" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // Store active conversations
 const activeConversations = new Map<string, ConversationState>();
 
-// Health check endpoint
+// ===========================================
+// Health Check Endpoints
+// ===========================================
+
+// Simple health check (for load balancer)
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "healthy", timestamp: new Date().toISOString() });
 });
 
-// Parse JSON body for REST endpoints
-app.use(express.json());
+// Detailed health check with dependency status
+app.get("/health/detailed", async (_req: Request, res: Response) => {
+  const health = await runHealthChecks();
+  const statusCode = health.status === "healthy" ? 200 : health.status === "degraded" ? 200 : 503;
+  res.status(statusCode).json(health);
+});
 
 // ============================================
 // Cal.com Booking Management REST Endpoints
 // ============================================
 
+// Apply rate limiting and auth to all /api routes
+app.use("/api", apiLimiter, apiKeyAuth);
+
 /**
- * Look up a booking by phone number
- * Used by Retell custom function to find existing appointments
+ * Look up a booking by phone number (GET)
  */
 app.get("/api/bookings/lookup", async (req: Request, res: Response) => {
   const phone = req.query.phone as string;
 
-  if (!phone) {
-    return res.status(400).json({ error: "Phone number required" });
+  // Validate phone number
+  const phoneResult = phoneSchema.safeParse(phone);
+  if (!phoneResult.success) {
+    return res.status(400).json({
+      error: "Invalid phone number",
+      details: phoneResult.error.issues.map((issue) => issue.message),
+    });
   }
 
-  console.log("[API] Looking up booking for phone:", phone);
+  logger.info({ phone: maskPhone(phone) }, "Booking lookup requested");
   const result = await lookupBookingByPhone(phone);
   res.json(result);
 });
 
 /**
- * POST endpoint for Retell webhook (lookup)
+ * Look up a booking by phone number (POST - for Retell webhook)
  */
 app.post("/api/bookings/lookup", async (req: Request, res: Response) => {
-  const { phone } = req.body;
+  const validation = validate(lookupRequestSchema, req.body);
 
-  if (!phone) {
-    return res.status(400).json({ error: "Phone number required" });
+  if (!validation.success) {
+    return res.status(400).json({ error: "Validation failed", details: validation.errors });
   }
 
-  console.log("[API] Looking up booking for phone:", phone);
+  const { phone } = validation.data!;
+  logger.info({ phone: maskPhone(phone) }, "Booking lookup requested");
   const result = await lookupBookingByPhone(phone);
   res.json(result);
 });
 
 /**
  * Cancel a booking
- * Used by Retell custom function to cancel appointments
  */
 app.post("/api/bookings/cancel", async (req: Request, res: Response) => {
-  const { booking_uid, reason } = req.body;
+  const validation = validate(cancelRequestSchema, req.body);
 
-  if (!booking_uid) {
-    return res.status(400).json({ error: "Booking UID required" });
+  if (!validation.success) {
+    return res.status(400).json({ error: "Validation failed", details: validation.errors });
   }
 
-  console.log("[API] Cancelling booking:", booking_uid);
+  const { booking_uid, reason } = validation.data!;
+  logger.info({ bookingUid: booking_uid }, "Booking cancellation requested");
   const result = await cancelBooking(booking_uid, reason);
   res.json(result);
 });
 
 /**
  * Reschedule a booking
- * Used by Retell custom function to reschedule appointments
  */
 app.post("/api/bookings/reschedule", async (req: Request, res: Response) => {
-  const { booking_uid, new_start_time } = req.body;
+  const validation = validate(rescheduleRequestSchema, req.body);
 
-  if (!booking_uid || !new_start_time) {
-    return res.status(400).json({ error: "Booking UID and new start time required" });
+  if (!validation.success) {
+    return res.status(400).json({ error: "Validation failed", details: validation.errors });
   }
 
-  console.log("[API] Rescheduling booking:", booking_uid, "to", new_start_time);
+  const { booking_uid, new_start_time } = validation.data!;
+  logger.info({ bookingUid: booking_uid }, "Booking reschedule requested");
   const result = await rescheduleBooking(booking_uid, new_start_time);
   res.json(result);
 });
 
-// Main WebSocket endpoint for Retell LLM
+// ============================================
+// WebSocket Endpoint for Retell LLM
+// ============================================
+
+const MAX_WS_MESSAGE_SIZE = 64 * 1024; // 64KB
+
 app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
   const callId = req.params.callId || `call_${Date.now()}`;
-  console.log(`[${callId}] WebSocket connection established`);
+  const log = createCallLogger(callId);
+
+  log.info("WebSocket connection established");
 
   // Initialize conversation state
   const state: ConversationState = {
@@ -163,9 +229,15 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
 
   // Handle incoming messages from Retell
   ws.on("message", async (data: Buffer) => {
+    // Message size limit
+    if (data.length > MAX_WS_MESSAGE_SIZE) {
+      log.warn({ size: data.length }, "WebSocket message too large, ignoring");
+      return;
+    }
+
     try {
       const message: RetellRequest = JSON.parse(data.toString());
-      console.log(`[${callId}] Received:`, message.interaction_type);
+      log.debug({ interactionType: message.interaction_type }, "Received message");
 
       switch (message.interaction_type) {
         case "ping_pong":
@@ -183,7 +255,7 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
             state.customerPhone = message.call.to_number;
           }
           if (message.call.metadata) {
-            console.log(`[${callId}] Call metadata:`, message.call.metadata);
+            log.info({ metadata: message.call.metadata }, "Call metadata received");
           }
 
           // Send initial greeting for outbound call
@@ -198,18 +270,18 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
               end_call: false,
             };
             sendResponse(ws, greetingResponse);
-            console.log(`[${callId}] Sent initial greeting`);
+            log.info("Sent initial greeting");
           }
           break;
 
         case "update_only":
           // Just a transcript update, no response needed
-          console.log(`[${callId}] Transcript update (no response needed)`);
+          log.debug("Transcript update (no response needed)");
           break;
 
         case "response_required":
           // User said something, we need to respond
-          console.log(`[${callId}] Response required, processing...`);
+          log.info("Response required, processing");
           const transcript = message.transcript;
           const responseId = message.response_id;
 
@@ -222,12 +294,12 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
               content,
               content_complete: true,
               end_call: endCall,
-              transfer_number: transferNumber, // For Tier 2 urgent transfers
+              transfer_number: transferNumber,
             };
             sendResponse(ws, response);
-            console.log(`[${callId}] Sent response (end_call: ${endCall}, transfer: ${transferNumber || "none"})`);
+            log.info({ endCall, hasTransfer: !!transferNumber }, "Sent response");
           } catch (error) {
-            console.error(`[${callId}] Error generating response:`, error);
+            log.error({ error }, "Error generating response");
             // Send fallback response
             const fallbackResponse: ResponseResponse = {
               response_type: "response",
@@ -242,7 +314,7 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
 
         case "reminder_required":
           // User has been silent, send a reminder
-          console.log(`[${callId}] Reminder required`);
+          log.info("Reminder required");
           const reminderResponseId = message.response_id;
           const reminder = llm.getReminder();
 
@@ -257,34 +329,37 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
           break;
 
         default:
-          console.log(`[${callId}] Unknown interaction type:`, (message as any).interaction_type);
+          log.warn({ interactionType: (message as any).interaction_type }, "Unknown interaction type");
       }
     } catch (error) {
-      console.error(`[${callId}] Error processing message:`, error);
+      log.error({ error }, "Error processing message");
     }
   });
 
   ws.on("close", () => {
-    console.log(`[${callId}] WebSocket connection closed`);
+    log.info("WebSocket connection closed");
 
-    // Log final conversation state
+    // Log final conversation state (without PII)
     const finalState = activeConversations.get(callId);
     if (finalState) {
-      console.log(`[${callId}] Final state:`, {
-        appointmentBooked: finalState.appointmentBooked,
-        serviceType: finalState.serviceType,
-        urgency: finalState.urgency,
-        endCallReason: finalState.endCallReason,
-        isSafetyEmergency: finalState.isSafetyEmergency,
-        isUrgentEscalation: finalState.isUrgentEscalation,
-      });
+      log.info(
+        {
+          appointmentBooked: finalState.appointmentBooked,
+          serviceType: finalState.serviceType,
+          urgency: finalState.urgency,
+          endCallReason: finalState.endCallReason,
+          isSafetyEmergency: finalState.isSafetyEmergency,
+          isUrgentEscalation: finalState.isUrgentEscalation,
+        },
+        "Final conversation state"
+      );
     }
 
     activeConversations.delete(callId);
   });
 
   ws.on("error", (error) => {
-    console.error(`[${callId}] WebSocket error:`, error);
+    log.error({ error }, "WebSocket error");
   });
 });
 
@@ -295,22 +370,25 @@ function sendResponse(ws: WebSocket, response: RetellResponse) {
   }
 }
 
-// Start server
+// ===========================================
+// Start Server
+// ===========================================
+
 const server = app.listen(PORT, () => {
-  console.log(`CallLock HVAC Retell Server running on port ${PORT}`);
-  console.log(`WebSocket endpoint: ws://localhost:${PORT}/llm-websocket`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
+  logger.info({ port: PORT }, "CallLock HVAC Retell Server started");
+  logger.info({ wsEndpoint: `ws://localhost:${PORT}/llm-websocket` }, "WebSocket endpoint ready");
+  logger.info({ healthCheck: `http://localhost:${PORT}/health` }, "Health check ready");
 
   // Keep-alive ping for Render free tier (prevents spin-down)
   const RENDER_URL = process.env.RENDER_EXTERNAL_URL || process.env.RENDER_URL;
   if (RENDER_URL) {
-    console.log(`[Keep-alive] Enabled for ${RENDER_URL}`);
+    logger.info({ url: RENDER_URL }, "Keep-alive enabled");
     setInterval(async () => {
       try {
         await fetch(`${RENDER_URL}/health`);
         // Quiet success - only log failures
-      } catch (e) {
-        console.log("[Keep-alive] Ping failed");
+      } catch (error) {
+        logger.warn({ error }, "Keep-alive ping failed");
       }
     }, 14 * 60 * 1000); // Every 14 minutes
   }
@@ -321,23 +399,23 @@ const server = app.listen(PORT, () => {
 // ===========================================
 
 function gracefulShutdown(signal: string) {
-  console.log(`\n${signal} received. Starting graceful shutdown...`);
+  logger.info({ signal }, "Graceful shutdown initiated");
 
   // Log active conversations
   const activeCount = activeConversations.size;
   if (activeCount > 0) {
-    console.log(`⚠️  ${activeCount} active conversation(s) will be terminated`);
+    logger.warn({ activeCount }, "Active conversations will be terminated");
   }
 
   // Close HTTP server (stop accepting new connections)
   server.close(() => {
-    console.log("✅ HTTP server closed");
+    logger.info("HTTP server closed");
     process.exit(0);
   });
 
   // Force shutdown after 10 seconds if graceful shutdown fails
   setTimeout(() => {
-    console.error("❌ Graceful shutdown timed out, forcing exit");
+    logger.error("Graceful shutdown timed out, forcing exit");
     process.exit(1);
   }, 10000);
 }

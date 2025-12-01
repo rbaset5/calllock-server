@@ -4,12 +4,14 @@ import {
   CalendarSlot,
   UrgencyLevel,
 } from "../types/retell.js";
+import { createModuleLogger } from "../utils/logger.js";
+import { fetchWithRetry, FetchError } from "../utils/fetch.js";
+
+const log = createModuleLogger("calendar");
 
 const CAL_COM_API_KEY = process.env.CAL_COM_API_KEY;
 const CAL_COM_EVENT_TYPE_ID = process.env.CAL_COM_EVENT_TYPE_ID || "3877847";
-const CAL_COM_USERNAME = process.env.CAL_COM_USERNAME || "rashidbaset";
 const CAL_API_BASE = "https://api.cal.com/v2";
-const FETCH_TIMEOUT_MS = 10000;
 
 interface CalComSlot {
   time: string;
@@ -29,7 +31,7 @@ interface CalComSlotsResponse {
 export async function checkCalendarAvailability(
   params: CalendarAvailabilityParams
 ): Promise<CalendarAvailabilityResult> {
-  console.log("[Calendar] Checking availability:", params);
+  log.info({ urgency: params.urgency }, "Checking availability");
 
   // Try Cal.com API if configured
   if (CAL_COM_API_KEY) {
@@ -38,9 +40,13 @@ export async function checkCalendarAvailability(
       if (calComSlots.availableSlots.length > 0) {
         return calComSlots;
       }
-      console.log("[Calendar] No Cal.com slots available, using mock data");
+      log.info("No Cal.com slots available, using mock data");
     } catch (error) {
-      console.error("[Calendar] Cal.com API error, falling back to mock:", error);
+      if (error instanceof FetchError) {
+        log.error({ error: error.message, attempts: error.attempts }, "Cal.com API failed after retries, using mock");
+      } else {
+        log.error({ error }, "Cal.com API error, falling back to mock");
+      }
     }
   }
 
@@ -51,7 +57,9 @@ export async function checkCalendarAvailability(
 /**
  * Fetch real availability from Cal.com API
  */
-async function fetchCalComAvailability(urgency: UrgencyLevel): Promise<CalendarAvailabilityResult> {
+async function fetchCalComAvailability(
+  urgency: UrgencyLevel
+): Promise<CalendarAvailabilityResult> {
   const now = new Date();
   let startDate: Date;
   let endDate: Date;
@@ -79,76 +87,94 @@ async function fetchCalComAvailability(urgency: UrgencyLevel): Promise<CalendarA
 
   const url = `${CAL_API_BASE}/slots/available?startTime=${encodeURIComponent(startTime)}&endTime=${encodeURIComponent(endTime)}&eventTypeId=${CAL_COM_EVENT_TYPE_ID}`;
 
-  console.log("[Calendar] Fetching Cal.com slots:", { startTime, endTime, eventTypeId: CAL_COM_EVENT_TYPE_ID });
+  log.info(
+    { startTime, endTime, eventTypeId: CAL_COM_EVENT_TYPE_ID },
+    "Fetching Cal.com slots"
+  );
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, {
+  const response = await fetchWithRetry(
+    url,
+    {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${CAL_COM_API_KEY}`,
+        Authorization: `Bearer ${CAL_COM_API_KEY}`,
         "cal-api-version": "2024-08-13",
         "Content-Type": "application/json",
       },
-      signal: controller.signal,
-    });
+    },
+    { retries: 2, timeout: 10000 }
+  );
 
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      const error = await response.text();
-      console.error("[Calendar] Cal.com API error:", response.status, error);
-      throw new Error(`Cal.com API error: ${response.status}`);
-    }
-
-    const data = await response.json() as CalComSlotsResponse;
-    console.log("[Calendar] Cal.com response:", JSON.stringify(data).substring(0, 200));
-
-    // Convert Cal.com slots to our format
-    const slots: CalendarSlot[] = [];
-    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-    if (data.data?.slots) {
-      // Cal.com returns slots grouped by date
-      for (const [dateStr, daySlots] of Object.entries(data.data.slots)) {
-        if (daySlots.length === 0) continue;
-
-        // Take first available slot for each day
-        const firstSlot = daySlots[0];
-        const slotDate = new Date(firstSlot.time);
-
-        const isToday = slotDate.toDateString() === now.toDateString();
-        const isTomorrow = slotDate.toDateString() === new Date(now.getTime() + 24 * 60 * 60 * 1000).toDateString();
-
-        slots.push({
-          date: dateStr,
-          dayOfWeek: isToday ? "Today" : isTomorrow ? "Tomorrow" : dayNames[slotDate.getDay()],
-          timeWindow: formatTime(slotDate),
-        });
-
-        // Limit to 3 options
-        if (slots.length >= 3) break;
-      }
-    }
-
-    console.log("[Calendar] Parsed slots:", slots);
-    return { availableSlots: slots };
-
-  } catch (error) {
-    clearTimeout(timeout);
-    throw error;
+  if (!response.ok) {
+    const error = await response.text();
+    log.error({ status: response.status, error }, "Cal.com API error");
+    throw new Error(`Cal.com API error: ${response.status}`);
   }
+
+  const data = (await response.json()) as CalComSlotsResponse;
+
+  // Convert Cal.com slots to our format
+  const slots: CalendarSlot[] = [];
+  const dayNames = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ];
+
+  if (data.data?.slots) {
+    // Cal.com returns slots grouped by date
+    for (const [dateStr, daySlots] of Object.entries(data.data.slots)) {
+      if (daySlots.length === 0) continue;
+
+      // Take first available slot for each day
+      const firstSlot = daySlots[0];
+      const slotDate = new Date(firstSlot.time);
+
+      const isToday = slotDate.toDateString() === now.toDateString();
+      const isTomorrow =
+        slotDate.toDateString() ===
+        new Date(now.getTime() + 24 * 60 * 60 * 1000).toDateString();
+
+      slots.push({
+        date: dateStr,
+        dayOfWeek: isToday
+          ? "Today"
+          : isTomorrow
+            ? "Tomorrow"
+            : dayNames[slotDate.getDay()],
+        timeWindow: formatTime(slotDate),
+      });
+
+      // Limit to 3 options
+      if (slots.length >= 3) break;
+    }
+  }
+
+  log.info({ slotCount: slots.length }, "Parsed Cal.com slots");
+  return { availableSlots: slots };
 }
 
 /**
  * Generate mock availability slots based on urgency (fallback)
  */
-function generateMockAvailability(urgency: UrgencyLevel): CalendarAvailabilityResult {
+function generateMockAvailability(
+  urgency: UrgencyLevel
+): CalendarAvailabilityResult {
   const now = new Date();
   const slots: CalendarSlot[] = [];
-  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const dayNames = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ];
 
   switch (urgency) {
     case "Emergency":
@@ -156,9 +182,7 @@ function generateMockAvailability(urgency: UrgencyLevel): CalendarAvailabilityRe
       slots.push({
         date: emergencyTime.toISOString().split("T")[0],
         dayOfWeek: "Today",
-        timeWindow: `${formatTime(emergencyTime)} - ${formatTime(
-          new Date(emergencyTime.getTime() + 2 * 60 * 60 * 1000)
-        )}`,
+        timeWindow: `${formatTime(emergencyTime)} - ${formatTime(new Date(emergencyTime.getTime() + 2 * 60 * 60 * 1000))}`,
       });
       break;
 
@@ -171,9 +195,7 @@ function generateMockAvailability(urgency: UrgencyLevel): CalendarAvailabilityRe
       slots.push({
         date: now.toISOString().split("T")[0],
         dayOfWeek: "Today",
-        timeWindow: `${formatTime(urgentTime1)} - ${formatTime(
-          new Date(urgentTime1.getTime() + 2 * 60 * 60 * 1000)
-        )}`,
+        timeWindow: `${formatTime(urgentTime1)} - ${formatTime(new Date(urgentTime1.getTime() + 2 * 60 * 60 * 1000))}`,
       });
       slots.push({
         date: tomorrow.toISOString().split("T")[0],
@@ -201,6 +223,7 @@ function generateMockAvailability(urgency: UrgencyLevel): CalendarAvailabilityRe
       break;
   }
 
+  log.info({ urgency, slotCount: slots.length }, "Generated mock availability");
   return { availableSlots: slots };
 }
 

@@ -16,20 +16,23 @@ import {
   validateServiceArea,
 } from "../functions/index.js";
 import { sendEmergencyAlert } from "../services/alerts.js";
+import { createCallLogger, Logger } from "../utils/logger.js";
 
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "ACE Cooling";
 const ON_CALL_PHONE_NUMBER = process.env.ON_CALL_PHONE_NUMBER;
 
-// Initialize Anthropic client
+// Initialize Anthropic client with timeout
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: 30000, // 30 second timeout
 });
 
 // Tool definitions for Claude - HVAC focused
 const tools: Anthropic.Tool[] = [
   {
     name: "checkCalendarAvailability",
-    description: "Check available appointment time slots based on urgency level. Call this when the customer is ready to schedule.",
+    description:
+      "Check available appointment time slots based on urgency level. Call this when the customer is ready to schedule.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -40,7 +43,8 @@ const tools: Anthropic.Tool[] = [
         },
         preferredDate: {
           type: "string",
-          description: "Customer's preferred date in YYYY-MM-DD format (optional)",
+          description:
+            "Customer's preferred date in YYYY-MM-DD format (optional)",
         },
       },
       required: ["urgency"],
@@ -48,7 +52,8 @@ const tools: Anthropic.Tool[] = [
   },
   {
     name: "bookAppointment",
-    description: "Book a confirmed HVAC service appointment after the customer has selected a time slot.",
+    description:
+      "Book a confirmed HVAC service appointment after the customer has selected a time slot.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -83,12 +88,18 @@ const tools: Anthropic.Tool[] = [
           description: "Brief description of the HVAC problem",
         },
       },
-      required: ["dateTime", "customerPhone", "serviceAddress", "problemDescription"],
+      required: [
+        "dateTime",
+        "customerPhone",
+        "serviceAddress",
+        "problemDescription",
+      ],
     },
   },
   {
     name: "validateServiceArea",
-    description: "Validate if a ZIP code is within the business's service area.",
+    description:
+      "Validate if a ZIP code is within the business's service area.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -102,7 +113,8 @@ const tools: Anthropic.Tool[] = [
   },
   {
     name: "transferCall",
-    description: "Transfer the call to the on-call technician for urgent situations (Tier 2 emergencies like no heat in freezing weather). Ring for 15-20 seconds, then fall back to SMS alert if no answer.",
+    description:
+      "Transfer the call to the on-call technician for urgent situations (Tier 2 emergencies like no heat in freezing weather). Ring for 15-20 seconds, then fall back to SMS alert if no answer.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -120,13 +132,15 @@ const tools: Anthropic.Tool[] = [
   },
   {
     name: "sendEmergencyAlert",
-    description: "Send an urgent SMS alert to the dispatcher/owner when transfer fails or for Tier 2 emergencies. Use this after failed transfer attempt.",
+    description:
+      "Send an urgent SMS alert to the dispatcher/owner when transfer fails or for Tier 2 emergencies. Use this after failed transfer attempt.",
     input_schema: {
       type: "object" as const,
       properties: {
         urgencyDescription: {
           type: "string",
-          description: "Short description of the emergency (e.g., 'No heat, elderly in home')",
+          description:
+            "Short description of the emergency (e.g., 'No heat, elderly in home')",
         },
         callerPhone: {
           type: "string",
@@ -146,13 +160,21 @@ const tools: Anthropic.Tool[] = [
   },
   {
     name: "endCall",
-    description: "End the call. Reasons: wrong_number (customer didn't call), callback_later (customer requests callback), safety_emergency (after giving safety instructions for gas leak/fire), urgent_escalation (after sending emergency alert for Tier 2), completed (appointment booked).",
+    description:
+      "End the call. Reasons: wrong_number (customer didn't call), callback_later (customer requests callback), safety_emergency (after giving safety instructions for gas leak/fire), urgent_escalation (after sending emergency alert for Tier 2), out_of_area (customer outside service area), completed (appointment booked).",
     input_schema: {
       type: "object" as const,
       properties: {
         reason: {
           type: "string",
-          enum: ["wrong_number", "callback_later", "safety_emergency", "urgent_escalation", "completed"],
+          enum: [
+            "wrong_number",
+            "callback_later",
+            "safety_emergency",
+            "urgent_escalation",
+            "out_of_area",
+            "completed",
+          ],
           description: "Reason for ending the call",
         },
       },
@@ -165,9 +187,11 @@ export class CallLockLLM {
   private state: ConversationState;
   private shouldEndCall: boolean = false;
   private transferNumber: string | undefined = undefined;
+  private log: Logger;
 
   constructor(state: ConversationState) {
     this.state = state;
+    this.log = createCallLogger(state.callId);
   }
 
   /**
@@ -203,6 +227,8 @@ export class CallLockLLM {
       content: msg.content,
     }));
 
+    const startTime = Date.now();
+
     // Call Claude with tools
     let response = await anthropic.messages.create({
       model: "claude-3-5-haiku-20241022",
@@ -211,6 +237,11 @@ export class CallLockLLM {
       tools,
       messages,
     });
+
+    this.log.debug(
+      { latencyMs: Date.now() - startTime, stopReason: response.stop_reason },
+      "Claude API response received"
+    );
 
     // Handle tool use in a loop until we get a text response
     while (response.stop_reason === "tool_use") {
@@ -222,7 +253,7 @@ export class CallLockLLM {
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
       for (const toolUse of toolUseBlocks) {
-        console.log(`[${this.state.callId}] Tool call: ${toolUse.name}`, toolUse.input);
+        this.log.info({ tool: toolUse.name, input: toolUse.input }, "Tool call");
 
         let result: string;
 
@@ -243,7 +274,8 @@ export class CallLockLLM {
               this.state.customerPhone = params.customerPhone;
               this.state.serviceAddress = params.serviceAddress;
               this.state.serviceType = "HVAC"; // Always HVAC
-              this.state.urgency = (params.urgency as UrgencyLevel) || "Routine";
+              this.state.urgency =
+                (params.urgency as UrgencyLevel) || "Routine";
               this.state.problemDescription = params.problemDescription;
 
               const booking = await bookAppointment({
@@ -275,18 +307,21 @@ export class CallLockLLM {
 
               if (!targetNumber) {
                 // No on-call number configured, skip transfer
+                this.log.warn("No on-call number configured for transfer");
                 result = JSON.stringify({
                   success: false,
                   transferred: false,
-                  message: "No on-call number configured. Please send an emergency alert instead."
+                  message:
+                    "No on-call number configured. Please send an emergency alert instead.",
                 });
               } else {
                 // Signal that we want to transfer (Retell will handle the actual transfer)
                 this.transferNumber = targetNumber;
+                this.log.info({ targetNumber }, "Transfer initiated");
                 result = JSON.stringify({
                   success: true,
                   transferred: true,
-                  message: `Attempting to transfer to ${targetNumber}. If no answer, fall back to emergency alert.`
+                  message: `Attempting to transfer to ${targetNumber}. If no answer, fall back to emergency alert.`,
                 });
               }
               break;
@@ -318,15 +353,17 @@ export class CallLockLLM {
                 this.state.isUrgentEscalation = true;
               }
 
+              this.log.info({ reason: params.reason }, "End call requested");
               result = JSON.stringify({ success: true, reason: params.reason });
               break;
             }
 
             default:
+              this.log.warn({ tool: toolUse.name }, "Unknown tool called");
               result = JSON.stringify({ error: `Unknown tool: ${toolUse.name}` });
           }
         } catch (error) {
-          console.error(`[${this.state.callId}] Tool error:`, error);
+          this.log.error({ error, tool: toolUse.name }, "Tool execution error");
           result = JSON.stringify({ error: "Tool execution failed" });
         }
 
@@ -348,6 +385,7 @@ export class CallLockLLM {
       });
 
       // Get next response
+      const toolLoopStart = Date.now();
       response = await anthropic.messages.create({
         model: "claude-3-5-haiku-20241022",
         max_tokens: 1000,
@@ -355,6 +393,11 @@ export class CallLockLLM {
         tools,
         messages,
       });
+
+      this.log.debug(
+        { latencyMs: Date.now() - toolLoopStart, stopReason: response.stop_reason },
+        "Claude tool loop response"
+      );
     }
 
     // Extract text response
@@ -362,7 +405,13 @@ export class CallLockLLM {
       (block): block is Anthropic.TextBlock => block.type === "text"
     );
 
-    const content = textBlock?.text || "I apologize, I didn't catch that. Could you repeat?";
+    const content =
+      textBlock?.text || "I apologize, I didn't catch that. Could you repeat?";
+
+    this.log.debug(
+      { totalLatencyMs: Date.now() - startTime, endCall: this.shouldEndCall },
+      "Response generation complete"
+    );
 
     return {
       content,

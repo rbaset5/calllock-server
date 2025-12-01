@@ -4,6 +4,10 @@
  */
 
 import { ConversationState, EmergencyAlertParams } from "../types/retell.js";
+import { createModuleLogger, maskPhone } from "../utils/logger.js";
+import { fetchWithRetry, FetchError } from "../utils/fetch.js";
+
+const log = createModuleLogger("supabase");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -12,7 +16,7 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 if (!isSupabaseConfigured) {
-  console.log("[Supabase] Not configured - data persistence disabled");
+  log.info("Not configured - data persistence disabled");
 }
 
 /**
@@ -54,7 +58,7 @@ interface EmergencyAlertRecord {
 }
 
 /**
- * Make a Supabase API request
+ * Make a Supabase API request with retry
  */
 async function supabaseRequest<T>(
   table: string,
@@ -69,30 +73,41 @@ async function supabaseRequest<T>(
   const url = `${SUPABASE_URL}/rest/v1/${table}${filters ? `?${filters}` : ""}`;
 
   try {
-    const response = await fetch(url, {
-      method,
-      headers: {
-        "apikey": SUPABASE_ANON_KEY!,
-        "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-        "Content-Type": "application/json",
-        "Prefer": method === "POST" ? "return=representation" : "return=minimal",
+    const response = await fetchWithRetry(
+      url,
+      {
+        method,
+        headers: {
+          apikey: SUPABASE_ANON_KEY!,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: method === "POST" ? "return=representation" : "return=minimal",
+        },
+        body: data ? JSON.stringify(data) : undefined,
       },
-      body: data ? JSON.stringify(data) : undefined,
-    });
+      { retries: 2, timeout: 10000 }
+    );
 
     if (!response.ok) {
       const error = await response.text();
-      console.error(`[Supabase] ${method} ${table} failed:`, response.status, error);
+      log.error({ method, table, status: response.status, error }, "Request failed");
       return null;
     }
 
-    if (method === "GET" || (method === "POST" && response.headers.get("Content-Length") !== "0")) {
-      return await response.json() as T;
+    if (
+      method === "GET" ||
+      (method === "POST" && response.headers.get("Content-Length") !== "0")
+    ) {
+      return (await response.json()) as T;
     }
 
     return null;
   } catch (error) {
-    console.error(`[Supabase] ${method} ${table} error:`, error);
+    if (error instanceof FetchError) {
+      log.error({ method, table, error: error.message, attempts: error.attempts }, "Request failed after retries");
+    } else {
+      log.error({ method, table, error }, "Request error");
+    }
     return null;
   }
 }
@@ -100,7 +115,10 @@ async function supabaseRequest<T>(
 /**
  * Save a call record when call starts
  */
-export async function saveCallStart(callId: string, phoneNumber?: string): Promise<void> {
+export async function saveCallStart(
+  callId: string,
+  phoneNumber?: string
+): Promise<void> {
   if (!isSupabaseConfigured) return;
 
   const record: CallRecord = {
@@ -110,7 +128,7 @@ export async function saveCallStart(callId: string, phoneNumber?: string): Promi
   };
 
   await supabaseRequest("calls", "POST", record);
-  console.log(`[Supabase] Call start saved: ${callId}`);
+  log.info({ callId, phone: maskPhone(phoneNumber) }, "Call start saved");
 }
 
 /**
@@ -130,9 +148,9 @@ export async function saveCallEnd(state: ConversationState): Promise<void> {
     "calls",
     "PATCH",
     updates,
-    `call_id=eq.${state.callId}`
+    `call_id=eq.${encodeURIComponent(state.callId)}`
   );
-  console.log(`[Supabase] Call end saved: ${state.callId}`);
+  log.info({ callId: state.callId, outcome: updates.outcome }, "Call end saved");
 }
 
 /**
@@ -161,7 +179,7 @@ export async function saveBooking(
   };
 
   await supabaseRequest("bookings", "POST", record);
-  console.log(`[Supabase] Booking saved: ${callId}`);
+  log.info({ callId, phone: maskPhone(state.customerPhone) }, "Booking saved");
 }
 
 /**
@@ -174,7 +192,9 @@ export async function saveEmergencyAlert(
   if (!isSupabaseConfigured) return;
 
   const now = new Date();
-  const callbackTime = new Date(now.getTime() + params.callbackMinutes * 60 * 1000);
+  const callbackTime = new Date(
+    now.getTime() + params.callbackMinutes * 60 * 1000
+  );
 
   const record: EmergencyAlertRecord = {
     call_id: callId,
@@ -186,7 +206,7 @@ export async function saveEmergencyAlert(
   };
 
   await supabaseRequest("emergency_alerts", "POST", record);
-  console.log(`[Supabase] Emergency alert saved: ${callId}`);
+  log.info({ callId, phone: maskPhone(params.callerPhone) }, "Emergency alert saved");
 }
 
 /**
@@ -202,7 +222,7 @@ export async function getCallHistory(
     "calls",
     "GET",
     undefined,
-    `phone_number=eq.${phoneNumber}&order=started_at.desc&limit=${limit}`
+    `phone_number=eq.${encodeURIComponent(phoneNumber)}&order=started_at.desc&limit=${limit}`
   );
 
   return result || [];
