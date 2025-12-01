@@ -5,43 +5,22 @@ import {
   UrgencyLevel,
 } from "../types/retell.js";
 
-const N8N_WEBHOOK_BASE_URL = process.env.N8N_WEBHOOK_BASE_URL;
+const FETCH_TIMEOUT_MS = 10000; // 10 second timeout
 
 /**
  * Check calendar availability based on urgency level
  *
- * This can either:
- * 1. Call your n8n webhook which queries Google Calendar
- * 2. Use mock data for testing
- * 3. Directly call Google Calendar API
+ * Currently uses mock data. To integrate Cal.com availability:
+ * - Use Cal.com Availability API: GET /v2/slots/available
+ * - See: https://cal.com/docs/api-reference/v2/slots
  */
 export async function checkCalendarAvailability(
   params: CalendarAvailabilityParams
 ): Promise<CalendarAvailabilityResult> {
   console.log("[Calendar] Checking availability:", params);
 
-  // If n8n webhook is configured, use it
-  if (N8N_WEBHOOK_BASE_URL) {
-    try {
-      const response = await fetch(`${N8N_WEBHOOK_BASE_URL}/calendar/availability`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Webhook-Secret": process.env.N8N_WEBHOOK_SECRET || "",
-        },
-        body: JSON.stringify(params),
-      });
-
-      if (response.ok) {
-        return (await response.json()) as CalendarAvailabilityResult;
-      }
-    } catch (error) {
-      console.error("[Calendar] n8n webhook error:", error);
-      // Fall through to mock data
-    }
-  }
-
-  // Return mock data for testing/demo
+  // TODO: Integrate Cal.com availability API
+  // For now, return mock availability based on urgency
   return generateMockAvailability(params.urgency);
 }
 

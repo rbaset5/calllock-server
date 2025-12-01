@@ -134,12 +134,23 @@ export interface RetellCallObject {
 }
 
 // ============================================
-// CallLock Specific Types
+// CallLock HVAC Types
 // ============================================
 
-export type ServiceType = "HVAC" | "Plumbing" | "Electrical" | "General";
+// Simplified to HVAC only
+export type ServiceType = "HVAC";
+
+// HVAC-specific issue classification
+export type HVACIssueType = "Cooling" | "Heating" | "Maintenance";
+
+// Two-tier emergency system + routine
+export type UrgencyTier = "LifeSafety" | "Urgent" | "Routine";
+
+// Legacy urgency level for calendar availability
 export type UrgencyLevel = "Emergency" | "Urgent" | "Routine" | "Estimate";
-export type EndCallReason = "wrong_number" | "callback_later" | "safety_emergency" | "completed";
+
+// Extended end call reasons to include urgent escalation
+export type EndCallReason = "wrong_number" | "callback_later" | "safety_emergency" | "urgent_escalation" | "completed";
 
 export interface CalendarSlot {
   date: string;
@@ -186,6 +197,34 @@ export interface EndCallParams {
 }
 
 // ============================================
+// Emergency Alert Types
+// ============================================
+
+export interface EmergencyAlertParams {
+  urgencyDescription: string; // e.g., "No heat, elderly in home"
+  callerPhone: string;
+  address: string;
+  callbackMinutes: number;
+}
+
+export interface EmergencyAlertResult {
+  success: boolean;
+  alertId?: string;
+  message: string;
+}
+
+export interface TransferCallParams {
+  targetNumber: string;
+  ringTimeoutSeconds?: number; // Default 20 seconds
+}
+
+export interface TransferCallResult {
+  success: boolean;
+  transferred: boolean;
+  message: string;
+}
+
+// ============================================
 // Conversation State
 // ============================================
 
@@ -195,11 +234,14 @@ export interface ConversationState {
   customerName?: string;
   serviceAddress?: string;
   serviceType?: ServiceType;
-  urgency?: UrgencyLevel;
+  hvacIssueType?: HVACIssueType;
+  urgencyTier?: UrgencyTier;
+  urgency?: UrgencyLevel; // Legacy for calendar
   problemDescription?: string;
   appointmentBooked: boolean;
   appointmentId?: string;
   appointmentDateTime?: string;
   endCallReason?: EndCallReason;
   isSafetyEmergency: boolean;
+  isUrgentEscalation: boolean;
 }

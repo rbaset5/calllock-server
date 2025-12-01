@@ -18,6 +18,37 @@ import {
   rescheduleBooking,
 } from "./services/calcom.js";
 
+// ===========================================
+// Startup Validation
+// ===========================================
+
+function validateEnvironment(): void {
+  const required = ["ANTHROPIC_API_KEY"];
+  const missing = required.filter((key) => !process.env[key]);
+
+  if (missing.length > 0) {
+    console.error("❌ Missing required environment variables:", missing.join(", "));
+    process.exit(1);
+  }
+
+  // Warn about optional but recommended variables
+  const recommended = ["RETELL_API_KEY", "BUSINESS_NAME", "SERVICE_AREA"];
+  const missingRecommended = recommended.filter((key) => !process.env[key]);
+  if (missingRecommended.length > 0) {
+    console.warn("⚠️  Missing recommended environment variables:", missingRecommended.join(", "));
+  }
+
+  // Warn if emergency escalation is not configured
+  if (!process.env.ON_CALL_PHONE_NUMBER && !process.env.EMERGENCY_SMS_NUMBER) {
+    console.warn("⚠️  No emergency escalation configured (ON_CALL_PHONE_NUMBER or EMERGENCY_SMS_NUMBER)");
+  }
+
+  console.log("✅ Environment validation passed");
+}
+
+// Run validation before starting
+validateEnvironment();
+
 const app = expressWs(express()).app;
 const PORT = process.env.PORT || 8080;
 
@@ -109,6 +140,7 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
     callId,
     appointmentBooked: false,
     isSafetyEmergency: false,
+    isUrgentEscalation: false,
   };
   activeConversations.set(callId, state);
 
@@ -182,7 +214,7 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
           const responseId = message.response_id;
 
           try {
-            const { content, endCall } = await llm.generateResponse(transcript);
+            const { content, endCall, transferNumber } = await llm.generateResponse(transcript);
 
             const response: ResponseResponse = {
               response_type: "response",
@@ -190,9 +222,10 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
               content,
               content_complete: true,
               end_call: endCall,
+              transfer_number: transferNumber, // For Tier 2 urgent transfers
             };
             sendResponse(ws, response);
-            console.log(`[${callId}] Sent response (end_call: ${endCall})`);
+            console.log(`[${callId}] Sent response (end_call: ${endCall}, transfer: ${transferNumber || "none"})`);
           } catch (error) {
             console.error(`[${callId}] Error generating response:`, error);
             // Send fallback response
@@ -242,6 +275,8 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
         serviceType: finalState.serviceType,
         urgency: finalState.urgency,
         endCallReason: finalState.endCallReason,
+        isSafetyEmergency: finalState.isSafetyEmergency,
+        isUrgentEscalation: finalState.isUrgentEscalation,
       });
     }
 
@@ -261,22 +296,52 @@ function sendResponse(ws: WebSocket, response: RetellResponse) {
 }
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`CallLock Retell WebSocket Server running on port ${PORT}`);
+const server = app.listen(PORT, () => {
+  console.log(`CallLock HVAC Retell Server running on port ${PORT}`);
   console.log(`WebSocket endpoint: ws://localhost:${PORT}/llm-websocket`);
   console.log(`Health check: http://localhost:${PORT}/health`);
 
   // Keep-alive ping for Render free tier (prevents spin-down)
-  const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
+  const RENDER_URL = process.env.RENDER_EXTERNAL_URL || process.env.RENDER_URL;
   if (RENDER_URL) {
     console.log(`[Keep-alive] Enabled for ${RENDER_URL}`);
     setInterval(async () => {
       try {
         await fetch(`${RENDER_URL}/health`);
-        console.log("[Keep-alive] Ping successful");
+        // Quiet success - only log failures
       } catch (e) {
         console.log("[Keep-alive] Ping failed");
       }
     }, 14 * 60 * 1000); // Every 14 minutes
   }
 });
+
+// ===========================================
+// Graceful Shutdown
+// ===========================================
+
+function gracefulShutdown(signal: string) {
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+
+  // Log active conversations
+  const activeCount = activeConversations.size;
+  if (activeCount > 0) {
+    console.log(`⚠️  ${activeCount} active conversation(s) will be terminated`);
+  }
+
+  // Close HTTP server (stop accepting new connections)
+  server.close(() => {
+    console.log("✅ HTTP server closed");
+    process.exit(0);
+  });
+
+  // Force shutdown after 10 seconds if graceful shutdown fails
+  setTimeout(() => {
+    console.error("❌ Graceful shutdown timed out, forcing exit");
+    process.exit(1);
+  }, 10000);
+}
+
+// Listen for termination signals
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));

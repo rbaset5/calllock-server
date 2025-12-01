@@ -6,27 +6,30 @@ import {
   CalendarAvailabilityParams,
   BookAppointmentParams,
   EndCallParams,
+  EmergencyAlertParams,
+  TransferCallParams,
   UrgencyLevel,
-  ServiceType,
 } from "../types/retell.js";
 import {
   checkCalendarAvailability,
   bookAppointment,
   validateServiceArea,
 } from "../functions/index.js";
+import { sendEmergencyAlert } from "../services/alerts.js";
 
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "ACE Cooling";
+const ON_CALL_PHONE_NUMBER = process.env.ON_CALL_PHONE_NUMBER;
 
 // Initialize Anthropic client
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Tool definitions for Claude
+// Tool definitions for Claude - HVAC focused
 const tools: Anthropic.Tool[] = [
   {
     name: "checkCalendarAvailability",
-    description: "Check available appointment time slots based on urgency level. Call this when the customer is ready to schedule and you need to offer available times.",
+    description: "Check available appointment time slots based on urgency level. Call this when the customer is ready to schedule.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -45,7 +48,7 @@ const tools: Anthropic.Tool[] = [
   },
   {
     name: "bookAppointment",
-    description: "Book a confirmed service appointment after the customer has selected a time slot. Call this to finalize the booking.",
+    description: "Book a confirmed HVAC service appointment after the customer has selected a time slot.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -67,8 +70,8 @@ const tools: Anthropic.Tool[] = [
         },
         serviceType: {
           type: "string",
-          enum: ["HVAC", "Plumbing", "Electrical", "General"],
-          description: "Type of service needed",
+          enum: ["HVAC"],
+          description: "Type of service (always HVAC)",
         },
         urgency: {
           type: "string",
@@ -77,15 +80,15 @@ const tools: Anthropic.Tool[] = [
         },
         problemDescription: {
           type: "string",
-          description: "Description of the problem/issue",
+          description: "Brief description of the HVAC problem",
         },
       },
-      required: ["dateTime", "customerPhone", "serviceAddress", "serviceType", "problemDescription"],
+      required: ["dateTime", "customerPhone", "serviceAddress", "problemDescription"],
     },
   },
   {
     name: "validateServiceArea",
-    description: "Validate if a ZIP code is within the business's service area. Call this if the customer provides an address and you want to verify coverage.",
+    description: "Validate if a ZIP code is within the business's service area.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -98,14 +101,58 @@ const tools: Anthropic.Tool[] = [
     },
   },
   {
+    name: "transferCall",
+    description: "Transfer the call to the on-call technician for urgent situations (Tier 2 emergencies like no heat in freezing weather). Ring for 15-20 seconds, then fall back to SMS alert if no answer.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        targetNumber: {
+          type: "string",
+          description: "Phone number to transfer to (usually on-call technician)",
+        },
+        ringTimeoutSeconds: {
+          type: "number",
+          description: "How long to ring before giving up (default 20)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "sendEmergencyAlert",
+    description: "Send an urgent SMS alert to the dispatcher/owner when transfer fails or for Tier 2 emergencies. Use this after failed transfer attempt.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        urgencyDescription: {
+          type: "string",
+          description: "Short description of the emergency (e.g., 'No heat, elderly in home')",
+        },
+        callerPhone: {
+          type: "string",
+          description: "Caller's phone number for callback",
+        },
+        address: {
+          type: "string",
+          description: "Service address",
+        },
+        callbackMinutes: {
+          type: "number",
+          description: "Promised callback time in minutes (default 15)",
+        },
+      },
+      required: ["urgencyDescription", "callerPhone"],
+    },
+  },
+  {
     name: "endCall",
-    description: "End the call. Use this for: wrong number (customer didn't call), callback later (customer requests callback), safety emergency (after giving safety instructions), or completed (appointment booked successfully).",
+    description: "End the call. Reasons: wrong_number (customer didn't call), callback_later (customer requests callback), safety_emergency (after giving safety instructions for gas leak/fire), urgent_escalation (after sending emergency alert for Tier 2), completed (appointment booked).",
     input_schema: {
       type: "object" as const,
       properties: {
         reason: {
           type: "string",
-          enum: ["wrong_number", "callback_later", "safety_emergency", "completed"],
+          enum: ["wrong_number", "callback_later", "safety_emergency", "urgent_escalation", "completed"],
           description: "Reason for ending the call",
         },
       },
@@ -117,6 +164,7 @@ const tools: Anthropic.Tool[] = [
 export class CallLockLLM {
   private state: ConversationState;
   private shouldEndCall: boolean = false;
+  private transferNumber: string | undefined = undefined;
 
   constructor(state: ConversationState) {
     this.state = state;
@@ -147,6 +195,7 @@ export class CallLockLLM {
   async generateResponse(transcript: TranscriptMessage[]): Promise<{
     content: string;
     endCall: boolean;
+    transferNumber?: string;
   }> {
     // Convert transcript to Claude message format
     const messages: Anthropic.MessageParam[] = transcript.map((msg) => ({
@@ -193,11 +242,15 @@ export class CallLockLLM {
               this.state.customerName = params.customerName;
               this.state.customerPhone = params.customerPhone;
               this.state.serviceAddress = params.serviceAddress;
-              this.state.serviceType = params.serviceType as ServiceType;
-              this.state.urgency = params.urgency as UrgencyLevel;
+              this.state.serviceType = "HVAC"; // Always HVAC
+              this.state.urgency = (params.urgency as UrgencyLevel) || "Routine";
               this.state.problemDescription = params.problemDescription;
 
-              const booking = await bookAppointment(params);
+              const booking = await bookAppointment({
+                ...params,
+                serviceType: "HVAC",
+                urgency: this.state.urgency,
+              });
 
               if (booking.success) {
                 this.state.appointmentBooked = true;
@@ -216,6 +269,43 @@ export class CallLockLLM {
               break;
             }
 
+            case "transferCall": {
+              const params = toolUse.input as TransferCallParams;
+              const targetNumber = params.targetNumber || ON_CALL_PHONE_NUMBER;
+
+              if (!targetNumber) {
+                // No on-call number configured, skip transfer
+                result = JSON.stringify({
+                  success: false,
+                  transferred: false,
+                  message: "No on-call number configured. Please send an emergency alert instead."
+                });
+              } else {
+                // Signal that we want to transfer (Retell will handle the actual transfer)
+                this.transferNumber = targetNumber;
+                result = JSON.stringify({
+                  success: true,
+                  transferred: true,
+                  message: `Attempting to transfer to ${targetNumber}. If no answer, fall back to emergency alert.`
+                });
+              }
+              break;
+            }
+
+            case "sendEmergencyAlert": {
+              const params = toolUse.input as EmergencyAlertParams;
+              const alertResult = await sendEmergencyAlert({
+                urgencyDescription: params.urgencyDescription,
+                callerPhone: params.callerPhone,
+                address: params.address || "Address not provided",
+                callbackMinutes: params.callbackMinutes || 15,
+              });
+
+              this.state.isUrgentEscalation = true;
+              result = JSON.stringify(alertResult);
+              break;
+            }
+
             case "endCall": {
               const params = toolUse.input as EndCallParams;
               this.state.endCallReason = params.reason;
@@ -223,6 +313,9 @@ export class CallLockLLM {
 
               if (params.reason === "safety_emergency") {
                 this.state.isSafetyEmergency = true;
+              }
+              if (params.reason === "urgent_escalation") {
+                this.state.isUrgentEscalation = true;
               }
 
               result = JSON.stringify({ success: true, reason: params.reason });
@@ -274,6 +367,7 @@ export class CallLockLLM {
     return {
       content,
       endCall: this.shouldEndCall,
+      transferNumber: this.transferNumber,
     };
   }
 }

@@ -3,43 +3,20 @@ import {
   BookAppointmentResult,
 } from "../types/retell.js";
 
-const N8N_WEBHOOK_BASE_URL = process.env.N8N_WEBHOOK_BASE_URL;
-
 /**
  * Book a service appointment
  *
- * This can either:
- * 1. Call your n8n webhook which creates Google Calendar event + logs to Sheets
- * 2. Return mock confirmation for testing
- * 3. Directly call Google Calendar API
+ * Currently uses mock confirmation. To integrate Cal.com booking:
+ * - Use Cal.com Bookings API: POST /v2/bookings
+ * - See: https://cal.com/docs/api-reference/v2/bookings
  */
 export async function bookAppointment(
   params: BookAppointmentParams
 ): Promise<BookAppointmentResult> {
   console.log("[Booking] Creating appointment:", params);
 
-  // If n8n webhook is configured, use it
-  if (N8N_WEBHOOK_BASE_URL) {
-    try {
-      const response = await fetch(`${N8N_WEBHOOK_BASE_URL}/appointments/book`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Webhook-Secret": process.env.N8N_WEBHOOK_SECRET || "",
-        },
-        body: JSON.stringify(params),
-      });
-
-      if (response.ok) {
-        return (await response.json()) as BookAppointmentResult;
-      }
-    } catch (error) {
-      console.error("[Booking] n8n webhook error:", error);
-      // Fall through to mock data
-    }
-  }
-
-  // Return mock confirmation for testing/demo
+  // TODO: Integrate Cal.com booking API
+  // For now, return mock confirmation
   return generateMockBookingConfirmation(params);
 }
 
@@ -72,7 +49,7 @@ function generateMockBookingConfirmation(
 }
 
 /**
- * Update an existing appointment (if needed)
+ * Update an existing appointment
  */
 export async function updateAppointment(
   appointmentId: string,
@@ -80,25 +57,7 @@ export async function updateAppointment(
 ): Promise<BookAppointmentResult> {
   console.log("[Booking] Updating appointment:", appointmentId, updates);
 
-  if (N8N_WEBHOOK_BASE_URL) {
-    try {
-      const response = await fetch(`${N8N_WEBHOOK_BASE_URL}/appointments/update`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Webhook-Secret": process.env.N8N_WEBHOOK_SECRET || "",
-        },
-        body: JSON.stringify({ appointmentId, ...updates }),
-      });
-
-      if (response.ok) {
-        return (await response.json()) as BookAppointmentResult;
-      }
-    } catch (error) {
-      console.error("[Booking] Update error:", error);
-    }
-  }
-
+  // TODO: Integrate with Cal.com reschedule API
   return {
     success: true,
     appointmentId,
@@ -115,25 +74,7 @@ export async function cancelAppointment(
 ): Promise<{ success: boolean; message: string }> {
   console.log("[Booking] Cancelling appointment:", appointmentId, reason);
 
-  if (N8N_WEBHOOK_BASE_URL) {
-    try {
-      const response = await fetch(`${N8N_WEBHOOK_BASE_URL}/appointments/cancel`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Webhook-Secret": process.env.N8N_WEBHOOK_SECRET || "",
-        },
-        body: JSON.stringify({ appointmentId, reason }),
-      });
-
-      if (response.ok) {
-        return (await response.json()) as { success: boolean; message: string };
-      }
-    } catch (error) {
-      console.error("[Booking] Cancel error:", error);
-    }
-  }
-
+  // TODO: Integrate with Cal.com cancel API
   return {
     success: true,
     message: "Appointment cancelled",
