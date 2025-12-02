@@ -33,24 +33,28 @@ export async function checkCalendarAvailability(
 ): Promise<CalendarAvailabilityResult> {
   log.info({ urgency: params.urgency }, "Checking availability");
 
-  // Try Cal.com API if configured
+  // Try Cal.com API if configured (production mode)
   if (CAL_COM_API_KEY) {
     try {
       const calComSlots = await fetchCalComAvailability(params.urgency);
-      if (calComSlots.availableSlots.length > 0) {
-        return calComSlots;
+      // Return Cal.com result even if empty - don't fake availability
+      if (calComSlots.availableSlots.length === 0) {
+        log.info("No Cal.com slots available");
       }
-      log.info("No Cal.com slots available, using mock data");
+      return calComSlots;
     } catch (error) {
       if (error instanceof FetchError) {
-        log.error({ error: error.message, attempts: error.attempts }, "Cal.com API failed after retries, using mock");
+        log.error({ error: error.message, attempts: error.attempts }, "Cal.com API failed after retries");
       } else {
-        log.error({ error }, "Cal.com API error, falling back to mock");
+        log.error({ error }, "Cal.com API error");
       }
+      // Return empty slots on API failure - don't fake availability
+      return { availableSlots: [] };
     }
   }
 
-  // Fall back to mock data
+  // Only use mock data when Cal.com is NOT configured (dev/testing mode)
+  log.info("Cal.com not configured, using mock data");
   return generateMockAvailability(params.urgency);
 }
 
