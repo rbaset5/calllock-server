@@ -102,6 +102,31 @@ const apiLimiter = rateLimit({
 const activeConversations = new Map<string, ConversationState>();
 
 // ===========================================
+// Inaudible Speech Detection
+// ===========================================
+
+/**
+ * Detect if user's speech was inaudible/unclear
+ * Retell sends various patterns when it can't transcribe audio
+ */
+function detectInaudible(text: string): boolean {
+  if (!text) return true;
+
+  const trimmed = text.trim().toLowerCase();
+  if (trimmed.length === 0) return true;
+
+  const inaudiblePatterns = [
+    /inaudible/i,
+    /^\[.*\]$/,           // bracketed placeholder like [unclear]
+    /^\.+$/,              // just dots/periods
+    /^\s*$/,              // whitespace only
+    /^(um|uh|hmm)\.?$/i,  // just filler sounds
+  ];
+
+  return inaudiblePatterns.some(p => p.test(trimmed));
+}
+
+// ===========================================
 // Health Check Endpoints
 // ===========================================
 
@@ -369,6 +394,23 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
 
           log.info({ responseId }, "Response required, queuing for processing");
 
+          // Check if the last user message is inaudible/unclear
+          const lastUserMsg = transcript.filter((m: { role: string }) => m.role === "user").pop();
+          const isInaudible = lastUserMsg && detectInaudible(lastUserMsg.content);
+
+          if (isInaudible) {
+            log.info({ responseId }, "Detected inaudible speech, sending clarification request");
+            const clarifyResponse: ResponseResponse = {
+              response_type: "response",
+              response_id: responseId,
+              content: "I'm sorry, I didn't quite catch that. Could you say that again?",
+              content_complete: true,
+              end_call: false,
+            };
+            sendResponse(ws, clarifyResponse);
+            break;
+          }
+
           // Chain onto the message queue to ensure sequential processing
           messageQueue = messageQueue.then(async () => {
             const processingStart = Date.now();
@@ -396,7 +438,7 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
               const fallbackResponse: ResponseResponse = {
                 response_type: "response",
                 response_id: responseId,
-                content: "I apologize, I'm having a technical issue. Please call us back or hold for a moment.",
+                content: "I'm sorry, I didn't quite catch that. Could you say that again?",
                 content_complete: true,
                 end_call: false,
               };
@@ -408,7 +450,7 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
             const errorResponse: ResponseResponse = {
               response_type: "response",
               response_id: responseId,
-              content: "I apologize, I'm having a brief technical issue. Could you repeat that?",
+              content: "I'm sorry, I didn't quite catch that. Could you say that again?",
               content_complete: true,
               end_call: false,
             };

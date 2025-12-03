@@ -280,7 +280,7 @@ export class CallLockLLM {
 
       // Return fallback response on timeout or error
       return {
-        content: "I apologize, I'm having a brief technical issue. Could you repeat that?",
+        content: "I'm sorry, I didn't quite catch that. Could you say that again?",
         endCall: false,
         transferNumber: undefined,
       };
