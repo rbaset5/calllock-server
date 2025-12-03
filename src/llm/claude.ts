@@ -202,7 +202,7 @@ export class CallLockLLM {
    * Get the initial greeting for outbound calls
    */
   getInitialGreeting(): string {
-    return `Hi, this is the CallLock assistant calling from ${BUSINESS_NAME}. I'm calling you back because you tried to reach us just a moment ago. Is this a good time?`;
+    return `Hi, this is ${BUSINESS_NAME}. I'm returning your call from just a moment ago—is this a good time?`;
   }
 
   /**
