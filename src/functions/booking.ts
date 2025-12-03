@@ -104,7 +104,7 @@ async function createCalComBooking(
       },
       body: JSON.stringify(bookingData),
     },
-    { retries: 2, timeout: 10000 }
+    { retries: 1, timeout: 5000 }  // Reduced to prevent blocking Retell responses
   );
 
   if (!response.ok) {
@@ -207,7 +207,7 @@ export async function cancelAppointment(
             cancellationReason: reason || "Cancelled via phone",
           }),
         },
-        { retries: 2, timeout: 10000 }
+        { retries: 1, timeout: 5000 }  // Reduced to prevent blocking Retell responses
       );
 
       if (response.ok) {
