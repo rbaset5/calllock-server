@@ -246,8 +246,12 @@ export class CallLockLLM {
   /**
    * Generate a response based on the conversation transcript
    * Wrapped with timeout to prevent blocking
+   * @param onIntermediateResponse - Optional callback to send intermediate text (e.g., transition phrases) before tool execution
    */
-  async generateResponse(transcript: TranscriptMessage[]): Promise<{
+  async generateResponse(
+    transcript: TranscriptMessage[],
+    onIntermediateResponse?: (text: string) => void
+  ): Promise<{
     content: string;
     endCall: boolean;
     transferNumber?: string;
@@ -264,7 +268,7 @@ export class CallLockLLM {
     try {
       // Race between actual response and timeout
       const result = await Promise.race([
-        this.generateResponseInternal(transcript),
+        this.generateResponseInternal(transcript, onIntermediateResponse),
         timeoutPromise,
       ]);
 
@@ -290,7 +294,10 @@ export class CallLockLLM {
   /**
    * Internal response generation - the actual logic
    */
-  private async generateResponseInternal(transcript: TranscriptMessage[]): Promise<{
+  private async generateResponseInternal(
+    transcript: TranscriptMessage[],
+    onIntermediateResponse?: (text: string) => void
+  ): Promise<{
     content: string;
     endCall: boolean;
     transferNumber?: string;
@@ -324,6 +331,20 @@ export class CallLockLLM {
     while (response.stop_reason === "tool_use" && toolIterations < MAX_TOOL_ITERATIONS) {
       toolIterations++;
       this.log.info({ iteration: toolIterations, maxIterations: MAX_TOOL_ITERATIONS }, "Tool loop iteration");
+
+      // Extract and send any text blocks (transition phrases) before executing tools
+      // This ensures callers hear "Let me take a look..." while we process
+      const textBlocks = response.content.filter(
+        (block): block is Anthropic.TextBlock => block.type === "text"
+      );
+
+      if (textBlocks.length > 0 && onIntermediateResponse) {
+        const intermediateText = textBlocks.map(b => b.text).join(" ").trim();
+        if (intermediateText) {
+          this.log.info({ text: intermediateText }, "Sending intermediate response before tool execution");
+          onIntermediateResponse(intermediateText);
+        }
+      }
 
       const toolUseBlocks = response.content.filter(
         (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"

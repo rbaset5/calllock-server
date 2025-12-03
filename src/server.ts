@@ -417,7 +417,23 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
             log.info({ responseId }, "Processing queued message");
 
             try {
-              const { content, endCall, transferNumber } = await llm.generateResponse(transcript);
+              // Callback to send intermediate responses (e.g., transition phrases) before tool execution
+              const onIntermediateResponse = (text: string) => {
+                log.info({ responseId, text }, "Sending intermediate response");
+                const intermediateResponse: ResponseResponse = {
+                  response_type: "response",
+                  response_id: responseId,
+                  content: text,
+                  content_complete: false, // More content coming after tool execution
+                  end_call: false,
+                };
+                sendResponse(ws, intermediateResponse);
+              };
+
+              const { content, endCall, transferNumber } = await llm.generateResponse(
+                transcript,
+                onIntermediateResponse
+              );
 
               const response: ResponseResponse = {
                 response_type: "response",
