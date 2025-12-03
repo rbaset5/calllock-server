@@ -151,6 +151,7 @@ async function fetchCalComAvailability(
             ? "Tomorrow"
             : dayNames[slotDate.getDay()],
         timeWindow: formatTime(slotDate),
+        isoDateTime: firstSlot.time, // Pass through ISO time from Cal.com for booking
       });
 
       // Limit to 3 options
@@ -187,6 +188,7 @@ function generateMockAvailability(
         date: emergencyTime.toISOString().split("T")[0],
         dayOfWeek: "Today",
         timeWindow: `${formatTime(emergencyTime)} - ${formatTime(new Date(emergencyTime.getTime() + 2 * 60 * 60 * 1000))}`,
+        isoDateTime: emergencyTime.toISOString(),
       });
       break;
 
@@ -200,11 +202,13 @@ function generateMockAvailability(
         date: now.toISOString().split("T")[0],
         dayOfWeek: "Today",
         timeWindow: `${formatTime(urgentTime1)} - ${formatTime(new Date(urgentTime1.getTime() + 2 * 60 * 60 * 1000))}`,
+        isoDateTime: urgentTime1.toISOString(),
       });
       slots.push({
         date: tomorrow.toISOString().split("T")[0],
         dayOfWeek: dayNames[tomorrow.getDay()],
         timeWindow: "9:00 AM - 11:00 AM",
+        isoDateTime: tomorrow.toISOString(),
       });
       break;
 
@@ -216,10 +220,14 @@ function generateMockAvailability(
         date.setDate(date.getDate() + i);
         if (date.getDay() === 0 || date.getDay() === 6) continue;
 
+        // Set time based on slot (9 AM or 2 PM)
+        date.setHours(i % 2 === 0 ? 9 : 14, 0, 0, 0);
+
         slots.push({
           date: date.toISOString().split("T")[0],
           dayOfWeek: dayNames[date.getDay()],
           timeWindow: i % 2 === 0 ? "9:00 AM - 11:00 AM" : "2:00 PM - 4:00 PM",
+          isoDateTime: date.toISOString(),
         });
 
         if (slots.length >= 3) break;

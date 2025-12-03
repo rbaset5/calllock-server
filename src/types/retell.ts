@@ -156,6 +156,7 @@ export interface CalendarSlot {
   date: string;
   dayOfWeek: string;
   timeWindow: string;
+  isoDateTime: string; // ISO 8601 format for booking API (e.g., "2024-12-05T14:00:00")
 }
 
 export interface CalendarAvailabilityParams {
