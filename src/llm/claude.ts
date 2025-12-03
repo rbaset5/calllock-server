@@ -218,6 +218,32 @@ export class CallLockLLM {
   }
 
   /**
+   * Get a contextual message when ending the call without Claude providing text
+   */
+  private getEndCallMessage(reason: string): string {
+    const serviceArea = process.env.SERVICE_AREA || "Austin and surrounding areas";
+
+    switch (reason) {
+      case "wrong_number":
+        return "I apologize for the confusion. Have a great day!";
+      case "callback_later":
+        return "No problem! Feel free to call us back anytime. Have a great day!";
+      case "safety_emergency":
+        return "Please stay safe. Emergency services have been notified.";
+      case "urgent_escalation":
+        return "Someone from our team will call you back shortly. Thank you for your patience.";
+      case "out_of_area":
+        return `I'm sorry, but we don't currently service that area. We serve ${serviceArea}. Thank you for calling!`;
+      case "waitlist_added":
+        return "You're on our waitlist! We'll call you as soon as a slot opens up. Have a great day!";
+      case "completed":
+        return "Your appointment is confirmed! A technician will call you about 30 minutes before arriving. Thank you for choosing us!";
+      default:
+        return "Thank you for calling. Have a great day!";
+    }
+  }
+
+  /**
    * Generate a response based on the conversation transcript
    * Wrapped with timeout to prevent blocking
    */
@@ -473,8 +499,16 @@ export class CallLockLLM {
       (block): block is Anthropic.TextBlock => block.type === "text"
     );
 
-    const content =
-      textBlock?.text || "I apologize, I didn't catch that. Could you repeat?";
+    // If no text block, provide a meaningful fallback based on context
+    let content = textBlock?.text;
+    if (!content) {
+      // Provide contextual fallback based on endCall reason
+      if (this.shouldEndCall && this.state.endCallReason) {
+        content = this.getEndCallMessage(this.state.endCallReason);
+      } else {
+        content = "I apologize, I didn't catch that. Could you repeat?";
+      }
+    }
 
     this.log.debug(
       { totalLatencyMs: Date.now() - startTime, endCall: this.shouldEndCall },
