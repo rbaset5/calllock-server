@@ -63,7 +63,7 @@ const tools: Anthropic.Tool[] = [
       properties: {
         dateTime: {
           type: "string",
-          description: "Appointment date and time in ISO 8601 format",
+          description: "Use the isoDateTime value from the calendar slot the customer selected (e.g., '2024-12-03T19:15:00.000Z')",
         },
         customerName: {
           type: "string",
