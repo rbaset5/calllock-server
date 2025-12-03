@@ -237,7 +237,7 @@ export class CallLockLLM {
       case "waitlist_added":
         return "You're on our waitlist! We'll call you as soon as a slot opens up. Have a great day!";
       case "completed":
-        return "Thanks for calling—we'll see you soon!";
+        return ""; // Claude already said farewell in Step 6
       default:
         return "Thank you for calling. Have a great day!";
     }

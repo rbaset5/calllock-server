@@ -37,8 +37,8 @@ TIER 2 URGENT (no heat <40°F, no AC >100°F, grinding/banging noise, ice on uni
 
 ROUTINE (all other issues):
 → Step 1: Ask "What's the service address?" - get FULL street address, city, and ZIP
-→ Step 2: Just say "Got it" and ask: "And what's the best number to reach you at?"
-→ Step 3: Say "Let me just double-check that ZIP code..." then MUST call validateServiceArea tool
+→ Step 2: Say "Got it" and ask: "And what's the best number to reach you at?" → STOP and WAIT for their answer before continuing
+→ Step 3: After they give their phone number, say "Let me just double-check that ZIP code..." then MUST call validateServiceArea tool
 → Step 4a: If in service area:
   → FIRST say: "Great, we do service your area! Let me take a look at what we have available..."
   → THEN MUST call checkCalendarAvailability tool
