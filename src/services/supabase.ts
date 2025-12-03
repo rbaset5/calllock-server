@@ -57,6 +57,14 @@ interface EmergencyAlertRecord {
   [key: string]: unknown;
 }
 
+interface CallSessionRecord {
+  call_id: string;
+  conversation_state: ConversationState;
+  retell_data?: Record<string, unknown>;
+  synced_to_dashboard: boolean;
+  created_at?: string;
+}
+
 /**
  * Make a Supabase API request with retry
  */
@@ -229,6 +237,75 @@ export async function getCallHistory(
 }
 
 /**
+ * Save a call session for post-call webhook processing
+ * This stores the full conversation state so it can be retrieved
+ * when Retell's post-call webhook fires (after the WebSocket closes)
+ */
+export async function saveCallSession(state: ConversationState): Promise<void> {
+  if (!isSupabaseConfigured) {
+    log.warn({ callId: state.callId }, "Supabase not configured - session not persisted");
+    return;
+  }
+
+  const record: CallSessionRecord = {
+    call_id: state.callId,
+    conversation_state: state,
+    synced_to_dashboard: false,
+  };
+
+  await supabaseRequest("call_sessions", "POST", record as unknown as Record<string, unknown>);
+  log.info({ callId: state.callId }, "Call session saved for post-call processing");
+}
+
+/**
+ * Retrieve a call session by call ID
+ */
+export async function getCallSession(callId: string): Promise<ConversationState | null> {
+  if (!isSupabaseConfigured) return null;
+
+  const result = await supabaseRequest<CallSessionRecord[]>(
+    "call_sessions",
+    "GET",
+    undefined,
+    `call_id=eq.${encodeURIComponent(callId)}&select=conversation_state`
+  );
+
+  if (result && result.length > 0) {
+    log.info({ callId }, "Call session retrieved");
+    return result[0].conversation_state;
+  }
+
+  log.warn({ callId }, "Call session not found");
+  return null;
+}
+
+/**
+ * Update call session with Retell post-call data and mark as synced
+ */
+export async function updateCallSessionSynced(
+  callId: string,
+  retellData?: Record<string, unknown>
+): Promise<void> {
+  if (!isSupabaseConfigured) return;
+
+  const updates: Record<string, unknown> = {
+    synced_to_dashboard: true,
+  };
+
+  if (retellData) {
+    updates.retell_data = retellData;
+  }
+
+  await supabaseRequest(
+    "call_sessions",
+    "PATCH",
+    updates,
+    `call_id=eq.${encodeURIComponent(callId)}`
+  );
+  log.info({ callId }, "Call session marked as synced");
+}
+
+/**
  * SQL to create tables in Supabase:
  *
  * -- Call history
@@ -272,8 +349,18 @@ export async function getCallHistory(
  *   created_at TIMESTAMPTZ DEFAULT NOW()
  * );
  *
+ * -- Call sessions (for dashboard integration)
+ * CREATE TABLE call_sessions (
+ *   call_id TEXT PRIMARY KEY,
+ *   conversation_state JSONB NOT NULL,
+ *   retell_data JSONB,
+ *   synced_to_dashboard BOOLEAN DEFAULT FALSE,
+ *   created_at TIMESTAMPTZ DEFAULT NOW()
+ * );
+ *
  * -- Enable Row Level Security
  * ALTER TABLE calls ENABLE ROW LEVEL SECURITY;
  * ALTER TABLE bookings ENABLE ROW LEVEL SECURITY;
  * ALTER TABLE emergency_alerts ENABLE ROW LEVEL SECURITY;
+ * ALTER TABLE call_sessions ENABLE ROW LEVEL SECURITY;
  */

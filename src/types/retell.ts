@@ -245,3 +245,43 @@ export interface ConversationState {
   isSafetyEmergency: boolean;
   isUrgentEscalation: boolean;
 }
+
+// ============================================
+// Retell Post-Call Webhook Types
+// ============================================
+
+/**
+ * Payload sent by Retell AI's post-call webhook
+ * This fires after the call ends AND audio processing is complete
+ */
+export interface RetellPostCallWebhook {
+  event: "call_ended" | "call_analyzed";
+  call: RetellPostCallData;
+}
+
+export interface RetellPostCallData {
+  call_id: string;
+  agent_id: string;
+  call_type: "web_call" | "phone_call";
+  call_status: "ended" | "error";
+  from_number?: string;
+  to_number?: string;
+  direction?: "inbound" | "outbound";
+  start_timestamp: number;
+  end_timestamp: number;
+  duration_ms?: number;
+  transcript?: string;
+  transcript_object?: TranscriptMessage[];
+  recording_url?: string;
+  public_log_url?: string;
+  call_analysis?: RetellCallAnalysis;
+  metadata?: Record<string, unknown>;
+  disconnection_reason?: string;
+}
+
+export interface RetellCallAnalysis {
+  call_summary?: string;
+  user_sentiment?: "positive" | "neutral" | "negative";
+  call_successful?: boolean;
+  custom_analysis_data?: Record<string, unknown>;
+}

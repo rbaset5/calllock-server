@@ -21,6 +21,10 @@ import { createCallLogger, Logger } from "../utils/logger.js";
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "ACE Cooling";
 const ON_CALL_PHONE_NUMBER = process.env.ON_CALL_PHONE_NUMBER;
 
+// Safety limits to prevent blocking
+const MAX_TOOL_ITERATIONS = 5; // Prevent infinite tool loops
+const RESPONSE_TIMEOUT_MS = 15000; // 15 second max for entire response generation
+
 // Initialize Anthropic client with timeout
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -215,8 +219,52 @@ export class CallLockLLM {
 
   /**
    * Generate a response based on the conversation transcript
+   * Wrapped with timeout to prevent blocking
    */
   async generateResponse(transcript: TranscriptMessage[]): Promise<{
+    content: string;
+    endCall: boolean;
+    transferNumber?: string;
+  }> {
+    const startTime = Date.now();
+
+    // Create timeout promise
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Response generation timed out after ${RESPONSE_TIMEOUT_MS}ms`));
+      }, RESPONSE_TIMEOUT_MS);
+    });
+
+    try {
+      // Race between actual response and timeout
+      const result = await Promise.race([
+        this.generateResponseInternal(transcript),
+        timeoutPromise,
+      ]);
+
+      this.log.info(
+        { totalLatencyMs: Date.now() - startTime },
+        "Response generated successfully"
+      );
+
+      return result;
+    } catch (error) {
+      const latency = Date.now() - startTime;
+      this.log.error({ error, latencyMs: latency }, "Response generation failed");
+
+      // Return fallback response on timeout or error
+      return {
+        content: "I apologize, I'm having a brief technical issue. Could you repeat that?",
+        endCall: false,
+        transferNumber: undefined,
+      };
+    }
+  }
+
+  /**
+   * Internal response generation - the actual logic
+   */
+  private async generateResponseInternal(transcript: TranscriptMessage[]): Promise<{
     content: string;
     endCall: boolean;
     transferNumber?: string;
@@ -244,7 +292,13 @@ export class CallLockLLM {
     );
 
     // Handle tool use in a loop until we get a text response
-    while (response.stop_reason === "tool_use") {
+    // SAFETY: Limit iterations to prevent infinite loops
+    let toolIterations = 0;
+
+    while (response.stop_reason === "tool_use" && toolIterations < MAX_TOOL_ITERATIONS) {
+      toolIterations++;
+      this.log.info({ iteration: toolIterations, maxIterations: MAX_TOOL_ITERATIONS }, "Tool loop iteration");
+
       const toolUseBlocks = response.content.filter(
         (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
       );
@@ -398,6 +452,20 @@ export class CallLockLLM {
         { latencyMs: Date.now() - toolLoopStart, stopReason: response.stop_reason },
         "Claude tool loop response"
       );
+    }
+
+    // SAFETY: Check if we hit the iteration limit
+    if (toolIterations >= MAX_TOOL_ITERATIONS && response.stop_reason === "tool_use") {
+      this.log.warn(
+        { iterations: toolIterations },
+        "Max tool iterations reached - forcing text response"
+      );
+      // Return a safe fallback response
+      return {
+        content: "I apologize for the delay. Let me help you directly. What would you like to schedule?",
+        endCall: false,
+        transferNumber: undefined,
+      };
     }
 
     // Extract text response

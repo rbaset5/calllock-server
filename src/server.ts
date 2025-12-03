@@ -13,12 +13,15 @@ import {
   PingPongResponse,
   ResponseResponse,
   ConversationState,
+  RetellPostCallWebhook,
 } from "./types/retell.js";
 import {
   lookupBookingByPhone,
   cancelBooking,
   rescheduleBooking,
 } from "./services/calcom.js";
+import { saveCallSession, getCallSession, updateCallSessionSynced } from "./services/supabase.js";
+import { sendJobToDashboard, isDashboardEnabled } from "./services/dashboard.js";
 
 // Infrastructure imports
 import { logger, createCallLogger, maskPhone } from "./utils/logger.js";
@@ -190,6 +193,81 @@ app.post("/api/bookings/reschedule", async (req: Request, res: Response) => {
 });
 
 // ============================================
+// Retell Post-Call Webhook (Dashboard Integration)
+// ============================================
+
+/**
+ * Handle Retell's post-call webhook
+ * This fires after the call ends AND audio processing is complete
+ * We use this to send call data to the CallLock Dashboard
+ */
+app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
+  try {
+    const payload = req.body as RetellPostCallWebhook;
+
+    // Validate we have the expected structure
+    if (!payload.call?.call_id) {
+      logger.warn("Post-call webhook received without call_id");
+      return res.status(400).json({ error: "Missing call_id" });
+    }
+
+    const callId = payload.call.call_id;
+    logger.info(
+      {
+        callId,
+        event: payload.event,
+        callStatus: payload.call.call_status,
+        hasSummary: Boolean(payload.call.call_analysis?.call_summary),
+        hasTranscript: Boolean(payload.call.transcript),
+      },
+      "Retell post-call webhook received"
+    );
+
+    // Check if dashboard integration is enabled
+    if (!isDashboardEnabled()) {
+      logger.info({ callId }, "Dashboard not configured - skipping sync");
+      return res.json({ success: true, message: "Dashboard not configured" });
+    }
+
+    // Retrieve the saved conversation state
+    const conversationState = await getCallSession(callId);
+
+    if (!conversationState) {
+      logger.warn({ callId }, "No saved conversation state found for call");
+      // Still acknowledge the webhook to prevent retries
+      return res.json({
+        success: false,
+        error: "Conversation state not found",
+        message: "Call may have been too short or session not saved",
+      });
+    }
+
+    // Send to dashboard
+    const dashboardResult = await sendJobToDashboard(conversationState, payload.call);
+
+    if (dashboardResult.success) {
+      // Mark session as synced
+      await updateCallSessionSynced(callId, payload.call as unknown as Record<string, unknown>);
+
+      logger.info({ callId, jobId: dashboardResult.jobId }, "Call synced to dashboard");
+      return res.json({
+        success: true,
+        job_id: dashboardResult.jobId,
+      });
+    } else {
+      logger.error({ callId, error: dashboardResult.error }, "Failed to sync call to dashboard");
+      return res.status(500).json({
+        success: false,
+        error: dashboardResult.error,
+      });
+    }
+  } catch (error) {
+    logger.error({ error }, "Error processing post-call webhook");
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ============================================
 // WebSocket Endpoint for Retell LLM
 // ============================================
 
@@ -215,6 +293,10 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
 
   // Track if we've sent the initial greeting
   let initialGreetingSent = false;
+
+  // Message queue to prevent race conditions
+  // Ensures messages are processed sequentially
+  let messageQueue: Promise<void> = Promise.resolve();
 
   // Send configuration on connect
   const configResponse: ConfigResponse = {
@@ -281,35 +363,57 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
 
         case "response_required":
           // User said something, we need to respond
-          log.info("Response required, processing");
+          // Queue message processing to prevent race conditions
           const transcript = message.transcript;
           const responseId = message.response_id;
 
-          try {
-            const { content, endCall, transferNumber } = await llm.generateResponse(transcript);
+          log.info({ responseId }, "Response required, queuing for processing");
 
-            const response: ResponseResponse = {
+          // Chain onto the message queue to ensure sequential processing
+          messageQueue = messageQueue.then(async () => {
+            const processingStart = Date.now();
+            log.info({ responseId }, "Processing queued message");
+
+            try {
+              const { content, endCall, transferNumber } = await llm.generateResponse(transcript);
+
+              const response: ResponseResponse = {
+                response_type: "response",
+                response_id: responseId,
+                content,
+                content_complete: true,
+                end_call: endCall,
+                transfer_number: transferNumber,
+              };
+              sendResponse(ws, response);
+              log.info(
+                { responseId, endCall, hasTransfer: !!transferNumber, processingMs: Date.now() - processingStart },
+                "Sent response"
+              );
+            } catch (error) {
+              log.error({ error, responseId }, "Error generating response");
+              // Send fallback response
+              const fallbackResponse: ResponseResponse = {
+                response_type: "response",
+                response_id: responseId,
+                content: "I apologize, I'm having a technical issue. Please call us back or hold for a moment.",
+                content_complete: true,
+                end_call: false,
+              };
+              sendResponse(ws, fallbackResponse);
+            }
+          }).catch((error) => {
+            log.error({ error, responseId }, "Queue processing error");
+            // IMPORTANT: Send error response to Retell so it doesn't hang
+            const errorResponse: ResponseResponse = {
               response_type: "response",
               response_id: responseId,
-              content,
-              content_complete: true,
-              end_call: endCall,
-              transfer_number: transferNumber,
-            };
-            sendResponse(ws, response);
-            log.info({ endCall, hasTransfer: !!transferNumber }, "Sent response");
-          } catch (error) {
-            log.error({ error }, "Error generating response");
-            // Send fallback response
-            const fallbackResponse: ResponseResponse = {
-              response_type: "response",
-              response_id: responseId,
-              content: "I apologize, I'm having a technical issue. Please call us back or hold for a moment.",
+              content: "I apologize, I'm having a brief technical issue. Could you repeat that?",
               content_complete: true,
               end_call: false,
             };
-            sendResponse(ws, fallbackResponse);
-          }
+            sendResponse(ws, errorResponse);
+          });
           break;
 
         case "reminder_required":
@@ -336,7 +440,7 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
     }
   });
 
-  ws.on("close", () => {
+  ws.on("close", async () => {
     log.info("WebSocket connection closed");
 
     // Log final conversation state (without PII)
@@ -353,6 +457,15 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
         },
         "Final conversation state"
       );
+
+      // Save session to Supabase for post-call webhook processing
+      // This allows us to retrieve the conversation state when Retell's
+      // post-call webhook fires (after audio processing completes)
+      try {
+        await saveCallSession(finalState);
+      } catch (error) {
+        log.error({ error, callId }, "Failed to save call session");
+      }
     }
 
     activeConversations.delete(callId);

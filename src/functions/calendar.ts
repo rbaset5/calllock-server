@@ -106,7 +106,7 @@ async function fetchCalComAvailability(
         "Content-Type": "application/json",
       },
     },
-    { retries: 2, timeout: 10000 }
+    { retries: 1, timeout: 5000 }  // Reduced to prevent blocking Retell responses
   );
 
   if (!response.ok) {
