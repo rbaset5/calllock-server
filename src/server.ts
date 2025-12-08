@@ -5,7 +5,8 @@ import { WebSocket } from "ws";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 
-import { CallLockLLM } from "./llm/claude.js";
+import { createLLMHandler, validateLLMConfig, getLLMProvider } from "./llm/factory.js";
+import { LLMHandler } from "./llm/types.js";
 import {
   RetellRequest,
   RetellResponse,
@@ -313,8 +314,8 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
   };
   activeConversations.set(callId, state);
 
-  // Initialize Claude LLM handler
-  const llm = new CallLockLLM(state);
+  // Initialize LLM handler (Claude or OpenAI based on LLM_PROVIDER)
+  const llm: LLMHandler = createLLMHandler(state);
 
   // Track if we've sent the initial greeting
   let initialGreetingSent = false;
@@ -357,18 +358,33 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
           break;
 
         case "call_details":
-          // Store call metadata
-          if (message.call.to_number) {
-            state.customerPhone = message.call.to_number;
-          }
-          if (message.call.metadata) {
-            log.info({ metadata: message.call.metadata }, "Call metadata received");
+          // Detect call direction (inbound vs outbound)
+          const callDirection = message.call.direction || "outbound";
+          state.callDirection = callDirection;
+
+          // Capture phone number based on direction
+          if (callDirection === "inbound") {
+            // INBOUND: Customer's phone is from_number (they called us)
+            if (message.call.from_number) {
+              state.customerPhone = message.call.from_number;
+              state.phoneFromCallerId = true;
+              log.info({ direction: callDirection }, "Captured caller ID from inbound call");
+            }
+          } else {
+            // OUTBOUND: Customer's phone is to_number (we called them)
+            if (message.call.to_number) {
+              state.customerPhone = message.call.to_number;
+            }
           }
 
-          // Send initial greeting for outbound call
+          if (message.call.metadata) {
+            log.info({ metadata: message.call.metadata, direction: callDirection }, "Call metadata received");
+          }
+
+          // Send initial greeting based on call direction
           if (!initialGreetingSent) {
             initialGreetingSent = true;
-            const greeting = llm.getInitialGreeting();
+            const greeting = llm.getInitialGreeting(callDirection);
             const greetingResponse: ResponseResponse = {
               response_type: "response",
               response_id: 0,
@@ -377,7 +393,7 @@ app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
               end_call: false,
             };
             sendResponse(ws, greetingResponse);
-            log.info("Sent initial greeting");
+            log.info({ direction: callDirection }, "Sent initial greeting");
           }
           break;
 
@@ -545,8 +561,11 @@ function sendResponse(ws: WebSocket, response: RetellResponse) {
 // Start Server
 // ===========================================
 
+// Validate LLM configuration before starting
+validateLLMConfig();
+
 const server = app.listen(PORT, () => {
-  logger.info({ port: PORT }, "CallLock HVAC Retell Server started");
+  logger.info({ port: PORT, llmProvider: getLLMProvider() }, "CallLock HVAC Retell Server started");
   logger.info({ wsEndpoint: `ws://localhost:${PORT}/llm-websocket` }, "WebSocket endpoint ready");
   logger.info({ healthCheck: `http://localhost:${PORT}/health` }, "Health check ready");
 

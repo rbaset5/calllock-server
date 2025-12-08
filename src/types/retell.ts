@@ -231,7 +231,9 @@ export interface TransferCallResult {
 
 export interface ConversationState {
   callId: string;
+  callDirection?: "inbound" | "outbound";
   customerPhone?: string;
+  phoneFromCallerId?: boolean;
   customerName?: string;
   serviceAddress?: string;
   serviceType?: ServiceType;

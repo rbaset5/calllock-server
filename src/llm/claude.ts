@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { CALLLOCK_SYSTEM_PROMPT_SHORT } from "./system-prompt-short.js";
+import { LLMHandler, LLMResponse } from "./types.js";
 import {
   TranscriptMessage,
   ConversationState,
@@ -187,7 +188,7 @@ const tools: Anthropic.Tool[] = [
   },
 ];
 
-export class CallLockLLM {
+export class CallLockLLM implements LLMHandler {
   private state: ConversationState;
   private shouldEndCall: boolean = false;
   private transferNumber: string | undefined = undefined;
@@ -199,10 +200,15 @@ export class CallLockLLM {
   }
 
   /**
-   * Get the initial greeting for outbound calls
+   * Get the initial greeting based on call direction
+   * @param direction - "inbound" or "outbound" from Retell call object
    */
-  getInitialGreeting(): string {
-    return `Hi, this is ${BUSINESS_NAME}. I'm returning your call from just a moment ago—is this a good time?`;
+  getInitialGreeting(direction?: "inbound" | "outbound"): string {
+    if (direction === "inbound") {
+      return `Thanks for calling ${BUSINESS_NAME}! What's going on with your AC or heating?`;
+    }
+    // Outbound (callback) mode
+    return `Hi, this is ${BUSINESS_NAME} returning your call—what's going on with your AC or heating?`;
   }
 
   /**
@@ -241,6 +247,32 @@ export class CallLockLLM {
       default:
         return "Thank you for calling. Have a great day!";
     }
+  }
+
+  /**
+   * Build the system prompt with dynamic context injections
+   * - Injects phone availability info when caller ID captured
+   * - Adjusts context for inbound vs outbound calls
+   */
+  private buildSystemPrompt(): string {
+    let prompt = CALLLOCK_SYSTEM_PROMPT_SHORT;
+
+    // Inject caller ID phone availability for inbound calls
+    if (this.state.phoneFromCallerId && this.state.customerPhone) {
+      prompt += `\n\nIMPORTANT: Customer's phone number is already captured from caller ID. DO NOT ask for their phone number—skip directly to checking calendar availability after confirming service area.`;
+    }
+
+    // Inject inbound context if needed
+    if (this.state.callDirection === "inbound") {
+      prompt = prompt.replace(
+        "You're calling the customer BACK",
+        "This is a LIVE INBOUND call"
+      );
+      // For inbound calls, skip transfer attempts (owner already missed the call)
+      prompt += `\n\nIMPORTANT: This is an inbound call—the owner already missed it. Do NOT use transferCall tool. For urgent situations, go straight to sendEmergencyAlert after offering the customer a choice.`;
+    }
+
+    return prompt;
   }
 
   /**
@@ -314,7 +346,7 @@ export class CallLockLLM {
     let response = await anthropic.messages.create({
       model: "claude-3-5-haiku-20241022",
       max_tokens: 1000,
-      system: CALLLOCK_SYSTEM_PROMPT_SHORT,
+      system: this.buildSystemPrompt(),
       tools,
       messages,
     });
@@ -490,7 +522,7 @@ export class CallLockLLM {
       response = await anthropic.messages.create({
         model: "claude-3-5-haiku-20241022",
         max_tokens: 1000,
-        system: CALLLOCK_SYSTEM_PROMPT_SHORT,
+        system: this.buildSystemPrompt(),
         tools,
         messages,
       });
