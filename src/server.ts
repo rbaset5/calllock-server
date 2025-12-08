@@ -15,6 +15,7 @@ import {
   ResponseResponse,
   ConversationState,
   RetellPostCallWebhook,
+  RetellPostCallData,
   UrgencyLevel,
 } from "./types/retell.js";
 import {
@@ -230,6 +231,43 @@ app.post("/api/bookings/reschedule", async (req: Request, res: Response) => {
 // ============================================
 
 /**
+ * Extract conversation state from post-call webhook data
+ * Used when no saved session exists (e.g., user hung up, built-in Cal.com tools used)
+ */
+function extractStateFromPostCallData(callData: RetellPostCallData): ConversationState {
+  // Extract phone from caller ID based on call direction
+  const customerPhone = callData.direction === "inbound"
+    ? callData.from_number
+    : callData.to_number;
+
+  // Try to extract address from transcript (look for address patterns)
+  let serviceAddress: string | undefined;
+  if (callData.transcript) {
+    // Look for common address patterns in transcript
+    const addressMatch = callData.transcript.match(
+      /(\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Court|Ct|Lane|Ln|Way|Boulevard|Blvd)[,\s]+[\w\s]+,?\s*(?:Texas|TX)?\s*\d{5})/i
+    );
+    if (addressMatch) {
+      serviceAddress = addressMatch[1].trim();
+    }
+  }
+
+  // Determine if appointment was booked based on call analysis
+  const appointmentBooked = callData.call_analysis?.call_successful === true;
+
+  return {
+    callId: callData.call_id,
+    customerPhone,
+    serviceAddress,
+    problemDescription: callData.call_analysis?.call_summary,
+    callDirection: callData.direction,
+    appointmentBooked,
+    isSafetyEmergency: false,
+    isUrgentEscalation: false,
+  };
+}
+
+/**
  * Handle Retell's post-call webhook
  * This fires after the call ends AND audio processing is complete
  * We use this to send call data to the CallLock Dashboard
@@ -262,17 +300,13 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       return res.json({ success: true, message: "Dashboard not configured" });
     }
 
-    // Retrieve the saved conversation state
-    const conversationState = await getCallSession(callId);
+    // Retrieve the saved conversation state, or extract from webhook data
+    let conversationState = await getCallSession(callId);
 
     if (!conversationState) {
-      logger.warn({ callId }, "No saved conversation state found for call");
-      // Still acknowledge the webhook to prevent retries
-      return res.json({
-        success: false,
-        error: "Conversation state not found",
-        message: "Call may have been too short or session not saved",
-      });
+      // No saved session - extract data from post-call webhook payload
+      logger.info({ callId }, "No session found, extracting from webhook data");
+      conversationState = extractStateFromPostCallData(payload.call);
     }
 
     // Send to dashboard
