@@ -150,19 +150,7 @@ export type UrgencyTier = "LifeSafety" | "Urgent" | "Routine";
 export type UrgencyLevel = "Emergency" | "Urgent" | "Routine" | "Estimate";
 
 // Extended end call reasons to include urgent escalation and waitlist
-export type EndCallReason =
-  | "wrong_number"
-  | "callback_later"
-  | "safety_emergency"
-  | "urgent_escalation"
-  | "out_of_area"
-  | "waitlist_added"
-  | "completed"
-  | "human_callback_requested"
-  | "complaint_escalation"
-  | "maintenance_booked"
-  | "second_opinion_booked"
-  | "new_install_lead";
+export type EndCallReason = "wrong_number" | "callback_later" | "safety_emergency" | "urgent_escalation" | "out_of_area" | "waitlist_added" | "completed";
 
 export interface CalendarSlot {
   date: string;

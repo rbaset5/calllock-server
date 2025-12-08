@@ -199,75 +199,48 @@ export class CallLockLLM {
   }
 
   /**
-   * Get the initial greeting for outbound calls - with rotation for variety
+   * Get the initial greeting for outbound calls
    */
   getInitialGreeting(): string {
-    const greetings = [
-      `Hey there, this is ${BUSINESS_NAME} returning your call. What can I do for you?`,
-      `Hi, this is ${BUSINESS_NAME}'s assistant calling you back. How can I help?`,
-      `Hey, ${BUSINESS_NAME} here returning your call. What's going on?`,
-    ];
-    return greetings[Math.floor(Math.random() * greetings.length)];
+    return `Hi, this is ${BUSINESS_NAME}. I'm returning your call from just a moment ago—is this a good time?`;
   }
 
   /**
-   * Get a reminder message when user is silent - kept short and natural
+   * Get a reminder message when user is silent
    */
   getReminder(): string {
     const reminders = [
-      "You still there?",
-      "Hello?",
-      "Still with me?",
+      "Are you still there?",
+      "Hello? I'm still here if you need help.",
+      "Just checking - would you like to continue scheduling your service appointment?",
     ];
     return reminders[Math.floor(Math.random() * reminders.length)];
   }
 
   /**
    * Get a contextual message when ending the call without Claude providing text
-   * Updated for warm but professional tone
    */
   private getEndCallMessage(reason: string): string {
+    const serviceArea = process.env.SERVICE_AREA || "Austin and surrounding areas";
+
     switch (reason) {
       case "wrong_number":
-        return "My apologies for the confusion. Have a great day!";
+        return "I apologize for the confusion. Have a great day!";
       case "callback_later":
-        return "No problem—give us a call whenever you're ready.";
+        return "No problem! Feel free to call us back anytime. Have a great day!";
       case "safety_emergency":
-        return "Stay safe. Help is on the way.";
+        return "Please stay safe. Emergency services have been notified.";
       case "urgent_escalation":
-        return "Someone from our team will call you back shortly.";
+        return "Someone from our team will call you back shortly. Thank you for your patience.";
       case "out_of_area":
-        return ""; // Claude already said farewell in Step 4b
+        return `I'm sorry, but we don't currently service that area. We serve ${serviceArea}. Thank you for calling!`;
       case "waitlist_added":
-        return "You're on our waitlist. We'll call as soon as something opens up.";
+        return "You're on our waitlist! We'll call you as soon as a slot opens up. Have a great day!";
       case "completed":
         return ""; // Claude already said farewell in Step 6
-      case "human_callback_requested":
-        return "No problem! Someone from our team will give you a call shortly.";
-      case "complaint_escalation":
-        return "I'm sorry about that experience. Someone will reach out to make this right.";
-      case "maintenance_booked":
-        return "Perfect, you're all set! We'll see you then.";
-      case "second_opinion_booked":
-        return "Great, our technician will take a fresh look. See you soon!";
-      case "new_install_lead":
-        return "Keep an eye out for our call!";
       default:
-        return "Thanks for calling! Take care.";
+        return "Thank you for calling. Have a great day!";
     }
-  }
-
-  /**
-   * Get a contextual fallback when we can't understand the caller
-   * Provides variation to avoid sounding scripted
-   */
-  private getContextualFallback(): string {
-    const fallbacks = [
-      "Sorry, I missed that. What was that?",
-      "Say that one more time for me?",
-      "Sorry, come again?",
-    ];
-    return fallbacks[Math.floor(Math.random() * fallbacks.length)];
   }
 
   /**
@@ -311,7 +284,7 @@ export class CallLockLLM {
 
       // Return fallback response on timeout or error
       return {
-        content: this.getContextualFallback(),
+        content: "I'm sorry, I didn't quite catch that. Could you say that again?",
         endCall: false,
         transferNumber: undefined,
       };
@@ -536,7 +509,7 @@ export class CallLockLLM {
       );
       // Return a safe fallback response
       return {
-        content: "Sorry about that—system's being slow. So what time works for you?",
+        content: "I apologize for the delay. Let me help you directly. What would you like to schedule?",
         endCall: false,
         transferNumber: undefined,
       };
@@ -554,7 +527,7 @@ export class CallLockLLM {
       if (this.shouldEndCall && this.state.endCallReason) {
         content = this.getEndCallMessage(this.state.endCallReason);
       } else {
-        content = this.getContextualFallback();
+        content = "I apologize, I didn't catch that. Could you repeat?";
       }
     }
 
