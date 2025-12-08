@@ -345,7 +345,7 @@ export class CallLockLLM implements LLMHandler {
     // Call Claude with tools
     let response = await anthropic.messages.create({
       model: "claude-3-5-haiku-20241022",
-      max_tokens: 1000,
+      max_tokens: 300,
       system: this.buildSystemPrompt(),
       tools,
       messages,
@@ -521,7 +521,7 @@ export class CallLockLLM implements LLMHandler {
       const toolLoopStart = Date.now();
       response = await anthropic.messages.create({
         model: "claude-3-5-haiku-20241022",
-        max_tokens: 1000,
+        max_tokens: 300,
         system: this.buildSystemPrompt(),
         tools,
         messages,

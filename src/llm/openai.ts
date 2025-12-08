@@ -323,7 +323,7 @@ export class OpenAILLM implements LLMHandler {
 
     let response = await this.openai.chat.completions.create({
       model: "gpt-4o",
-      max_tokens: 1000,
+      max_tokens: 300,
       messages,
       tools,
       tool_choice: "auto",
@@ -386,7 +386,7 @@ export class OpenAILLM implements LLMHandler {
       const toolLoopStart = Date.now();
       response = await this.openai.chat.completions.create({
         model: "gpt-4o",
-        max_tokens: 1000,
+        max_tokens: 300,
         messages,
         tools,
         tool_choice: "auto",
