@@ -26,12 +26,6 @@ const ON_CALL_PHONE_NUMBER = process.env.ON_CALL_PHONE_NUMBER;
 const MAX_TOOL_ITERATIONS = 5;
 const RESPONSE_TIMEOUT_MS = 15000;
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  timeout: 30000,
-});
-
 // Tool definitions for OpenAI function calling
 const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
@@ -207,10 +201,15 @@ export class OpenAILLM implements LLMHandler {
   private shouldEndCall: boolean = false;
   private transferNumber: string | undefined = undefined;
   private log: Logger;
+  private openai: OpenAI;
 
   constructor(state: ConversationState) {
     this.state = state;
     this.log = createCallLogger(state.callId);
+    this.openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      timeout: 30000,
+    });
   }
 
   getInitialGreeting(direction?: "inbound" | "outbound"): string {
@@ -322,7 +321,7 @@ export class OpenAILLM implements LLMHandler {
 
     const startTime = Date.now();
 
-    let response = await openai.chat.completions.create({
+    let response = await this.openai.chat.completions.create({
       model: "gpt-4o",
       max_tokens: 1000,
       messages,
@@ -385,7 +384,7 @@ export class OpenAILLM implements LLMHandler {
 
       // Get next response
       const toolLoopStart = Date.now();
-      response = await openai.chat.completions.create({
+      response = await this.openai.chat.completions.create({
         model: "gpt-4o",
         max_tokens: 1000,
         messages,
