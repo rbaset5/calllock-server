@@ -15,6 +15,7 @@ import {
   ResponseResponse,
   ConversationState,
   RetellPostCallWebhook,
+  UrgencyLevel,
 } from "./types/retell.js";
 import {
   lookupBookingByPhone,
@@ -23,6 +24,12 @@ import {
 } from "./services/calcom.js";
 import { saveCallSession, getCallSession, updateCallSessionSynced } from "./services/supabase.js";
 import { sendJobToDashboard, isDashboardEnabled } from "./services/dashboard.js";
+import {
+  checkCalendarAvailability,
+  bookAppointment,
+  validateServiceArea,
+} from "./functions/index.js";
+import { sendEmergencyAlert } from "./services/alerts.js";
 
 // Infrastructure imports
 import { logger, createCallLogger, maskPhone } from "./utils/logger.js";
@@ -290,6 +297,94 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
   } catch (error) {
     logger.error({ error }, "Error processing post-call webhook");
     return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ============================================
+// Webhook for Retell Built-in LLM Tool Calls
+// ============================================
+
+interface RetellToolCallWebhook {
+  call_id: string;
+  function_name: string;
+  args: Record<string, unknown>;
+}
+
+/**
+ * Handle tool calls from Retell's built-in LLM
+ * When using Retell's LLM instead of Custom LLM, tools are executed via webhook
+ */
+app.post("/webhook/retell/tool-call", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+
+  try {
+    const { call_id, function_name, args } = req.body as RetellToolCallWebhook;
+
+    logger.info({ callId: call_id, tool: function_name, args }, "Retell tool call received");
+
+    let result: unknown;
+
+    switch (function_name) {
+      case "validate_service_area": {
+        const zipCode = args.zip_code as string;
+        result = await validateServiceArea({ zipCode });
+        break;
+      }
+
+      case "check_calendar_availability": {
+        const urgency = (args.urgency as string) || "Routine";
+        const preferredDate = args.preferred_date as string | undefined;
+        result = await checkCalendarAvailability({
+          urgency: urgency as UrgencyLevel,
+          preferredDate
+        });
+        break;
+      }
+
+      case "book_appointment": {
+        const bookingUrgency = (args.urgency as string) || "Routine";
+        result = await bookAppointment({
+          dateTime: args.date_time as string,
+          customerName: args.customer_name as string | undefined,
+          customerPhone: args.customer_phone as string,
+          serviceAddress: args.service_address as string,
+          serviceType: "HVAC",
+          urgency: bookingUrgency as UrgencyLevel,
+          problemDescription: args.problem_description as string,
+        });
+        break;
+      }
+
+      case "send_emergency_alert": {
+        result = await sendEmergencyAlert({
+          urgencyDescription: args.urgency_description as string,
+          callerPhone: args.caller_phone as string,
+          address: args.address as string,
+          callbackMinutes: 15,
+        });
+        break;
+      }
+
+      case "end_call": {
+        // end_call is handled by Retell directly, just acknowledge
+        result = { success: true, reason: args.reason };
+        break;
+      }
+
+      default:
+        logger.warn({ tool: function_name }, "Unknown tool called");
+        result = { error: `Unknown tool: ${function_name}` };
+    }
+
+    logger.info(
+      { callId: call_id, tool: function_name, latencyMs: Date.now() - startTime },
+      "Tool call completed"
+    );
+
+    return res.json({ result });
+  } catch (error) {
+    logger.error({ error }, "Error processing tool call webhook");
+    return res.status(500).json({ error: "Tool execution failed" });
   }
 });
 
