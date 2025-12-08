@@ -301,89 +301,134 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
 });
 
 // ============================================
-// Webhook for Retell Built-in LLM Tool Calls
+// Webhooks for Retell Built-in LLM Tool Calls
+// Each function has its own endpoint
 // ============================================
 
-interface RetellToolCallWebhook {
-  call_id: string;
-  function_name: string;
+interface RetellFunctionWebhook {
+  call: {
+    call_id: string;
+    [key: string]: unknown;
+  };
   args: Record<string, unknown>;
 }
 
 /**
- * Handle tool calls from Retell's built-in LLM
- * When using Retell's LLM instead of Custom LLM, tools are executed via webhook
+ * Validate service area by ZIP code
  */
-app.post("/webhook/retell/tool-call", async (req: Request, res: Response) => {
+app.post("/webhook/retell/validate_service_area", async (req: Request, res: Response) => {
   const startTime = Date.now();
-
   try {
-    const { call_id, function_name, args } = req.body as RetellToolCallWebhook;
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const callId = call?.call_id || "unknown";
 
-    logger.info({ callId: call_id, tool: function_name, args }, "Retell tool call received");
+    logger.info({ callId, args }, "validate_service_area called");
 
-    let result: unknown;
+    const zipCode = args.zip_code as string;
+    const result = await validateServiceArea({ zipCode });
 
-    switch (function_name) {
-      case "validate_service_area": {
-        const zipCode = args.zip_code as string;
-        result = await validateServiceArea({ zipCode });
-        break;
-      }
-
-      case "check_calendar_availability": {
-        const urgency = (args.urgency as string) || "Routine";
-        const preferredDate = args.preferred_date as string | undefined;
-        result = await checkCalendarAvailability({
-          urgency: urgency as UrgencyLevel,
-          preferredDate
-        });
-        break;
-      }
-
-      case "book_appointment": {
-        const bookingUrgency = (args.urgency as string) || "Routine";
-        result = await bookAppointment({
-          dateTime: args.date_time as string,
-          customerName: args.customer_name as string | undefined,
-          customerPhone: args.customer_phone as string,
-          serviceAddress: args.service_address as string,
-          serviceType: "HVAC",
-          urgency: bookingUrgency as UrgencyLevel,
-          problemDescription: args.problem_description as string,
-        });
-        break;
-      }
-
-      case "send_emergency_alert": {
-        result = await sendEmergencyAlert({
-          urgencyDescription: args.urgency_description as string,
-          callerPhone: args.caller_phone as string,
-          address: args.address as string,
-          callbackMinutes: 15,
-        });
-        break;
-      }
-
-      case "end_call": {
-        // end_call is handled by Retell directly, just acknowledge
-        result = { success: true, reason: args.reason };
-        break;
-      }
-
-      default:
-        logger.warn({ tool: function_name }, "Unknown tool called");
-        result = { error: `Unknown tool: ${function_name}` };
-    }
-
-    logger.info(
-      { callId: call_id, tool: function_name, latencyMs: Date.now() - startTime },
-      "Tool call completed"
-    );
-
-    return res.json({ result });
+    logger.info({ callId, latencyMs: Date.now() - startTime }, "validate_service_area completed");
+    return res.json(result);
   } catch (error) {
-    logger.error({ error }, "Error processing tool call webhook");
+    logger.error({ error }, "validate_service_area failed");
+    return res.status(500).json({ error: "Tool execution failed" });
+  }
+});
+
+/**
+ * Check calendar availability
+ */
+app.post("/webhook/retell/check_calendar_availability", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const callId = call?.call_id || "unknown";
+
+    logger.info({ callId, args }, "check_calendar_availability called");
+
+    const urgency = (args.urgency as string) || "Routine";
+    const preferredDate = args.preferred_date as string | undefined;
+    const result = await checkCalendarAvailability({
+      urgency: urgency as UrgencyLevel,
+      preferredDate
+    });
+
+    logger.info({ callId, latencyMs: Date.now() - startTime }, "check_calendar_availability completed");
+    return res.json(result);
+  } catch (error) {
+    logger.error({ error }, "check_calendar_availability failed");
+    return res.status(500).json({ error: "Tool execution failed" });
+  }
+});
+
+/**
+ * Book an appointment
+ */
+app.post("/webhook/retell/book_appointment", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const callId = call?.call_id || "unknown";
+
+    logger.info({ callId, args }, "book_appointment called");
+
+    const bookingUrgency = (args.urgency as string) || "Routine";
+    const result = await bookAppointment({
+      dateTime: args.date_time as string,
+      customerName: args.customer_name as string | undefined,
+      customerPhone: args.customer_phone as string,
+      serviceAddress: args.service_address as string,
+      serviceType: "HVAC",
+      urgency: bookingUrgency as UrgencyLevel,
+      problemDescription: args.problem_description as string,
+    });
+
+    logger.info({ callId, latencyMs: Date.now() - startTime }, "book_appointment completed");
+    return res.json(result);
+  } catch (error) {
+    logger.error({ error }, "book_appointment failed");
+    return res.status(500).json({ error: "Tool execution failed" });
+  }
+});
+
+/**
+ * Send emergency alert
+ */
+app.post("/webhook/retell/send_emergency_alert", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const callId = call?.call_id || "unknown";
+
+    logger.info({ callId, args }, "send_emergency_alert called");
+
+    const result = await sendEmergencyAlert({
+      urgencyDescription: args.urgency_description as string,
+      callerPhone: args.caller_phone as string,
+      address: args.address as string,
+      callbackMinutes: 15,
+    });
+
+    logger.info({ callId, latencyMs: Date.now() - startTime }, "send_emergency_alert completed");
+    return res.json(result);
+  } catch (error) {
+    logger.error({ error }, "send_emergency_alert failed");
+    return res.status(500).json({ error: "Tool execution failed" });
+  }
+});
+
+/**
+ * End call - just acknowledge (Retell handles the actual call termination)
+ */
+app.post("/webhook/retell/end_call", async (req: Request, res: Response) => {
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const callId = call?.call_id || "unknown";
+
+    logger.info({ callId, reason: args.reason }, "end_call called");
+    return res.json({ success: true, reason: args.reason });
+  } catch (error) {
+    logger.error({ error }, "end_call failed");
     return res.status(500).json({ error: "Tool execution failed" });
   }
 });

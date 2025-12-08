@@ -214,12 +214,17 @@ Add these tools in the **Functions** section:
 }
 ```
 
-### Step 5: Configure Tool Webhook URL
+### Step 5: Configure API Endpoints for Each Tool
 
-In Retell Dashboard → Agent Settings → **Webhook URL for Functions**:
-```
-https://calllock-server.onrender.com/webhook/retell/tool-call
-```
+Each function needs its own API endpoint URL:
+
+| Function | API Endpoint |
+|----------|-------------|
+| validate_service_area | `https://calllock-server.onrender.com/webhook/retell/validate_service_area` |
+| check_calendar_availability | `https://calllock-server.onrender.com/webhook/retell/check_calendar_availability` |
+| book_appointment | `https://calllock-server.onrender.com/webhook/retell/book_appointment` |
+| send_emergency_alert | `https://calllock-server.onrender.com/webhook/retell/send_emergency_alert` |
+| end_call | `https://calllock-server.onrender.com/webhook/retell/end_call` |
 
 ### Step 6: Set Greeting Message
 
