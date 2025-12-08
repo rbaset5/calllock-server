@@ -491,6 +491,13 @@ app.post("/webhook/retell/end_call", async (req: Request, res: Response) => {
       state.isUrgentEscalation = true;
     }
 
+    // Capture any customer data collected during the call
+    if (args.customer_name) state.customerName = args.customer_name as string;
+    if (args.customer_phone) state.customerPhone = args.customer_phone as string;
+    if (args.customer_address) state.serviceAddress = args.customer_address as string;
+    if (args.problem_description) state.problemDescription = args.problem_description as string;
+    if (args.urgency) state.urgency = args.urgency as UrgencyLevel;
+
     logger.info({ callId: state.callId, reason, state }, "end_call called - saving state");
 
     // Save state to Supabase for post-call webhook to retrieve

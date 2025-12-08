@@ -199,7 +199,7 @@ Add these tools in the **Functions** section:
 ```json
 {
   "name": "end_call",
-  "description": "End the call with a specific reason. MUST be called to end every conversation.",
+  "description": "End the call. MUST be called to end every conversation. Pass any customer info collected.",
   "parameters": {
     "type": "object",
     "properties": {
@@ -207,6 +207,27 @@ Add these tools in the **Functions** section:
         "type": "string",
         "enum": ["wrong_number", "callback_later", "safety_emergency", "urgent_escalation", "out_of_area", "waitlist_added", "completed"],
         "description": "Reason for ending the call"
+      },
+      "customer_name": {
+        "type": "string",
+        "description": "Customer's name if collected during the call"
+      },
+      "customer_phone": {
+        "type": "string",
+        "description": "Customer's phone if different from caller ID"
+      },
+      "customer_address": {
+        "type": "string",
+        "description": "Service address if collected"
+      },
+      "problem_description": {
+        "type": "string",
+        "description": "Brief description of their HVAC issue"
+      },
+      "urgency": {
+        "type": "string",
+        "enum": ["Emergency", "Urgent", "Routine", "Estimate"],
+        "description": "Urgency level if determined"
       }
     },
     "required": ["reason"]
@@ -225,6 +246,19 @@ Each function needs its own API endpoint URL:
 | book_appointment | `https://calllock-server.onrender.com/webhook/retell/book_appointment` |
 | send_emergency_alert | `https://calllock-server.onrender.com/webhook/retell/send_emergency_alert` |
 | end_call | `https://calllock-server.onrender.com/webhook/retell/end_call` |
+
+### Step 5b: Configure Post-Call Webhook (IMPORTANT!)
+
+**This is required for the CallLock Dashboard to receive call data.**
+
+1. Go to **Retell Dashboard** → **Agent Settings** → **Webhooks**
+2. Find **Post-Call Webhook URL** and set it to:
+   ```
+   https://calllock-server.onrender.com/webhook/retell/call-ended
+   ```
+3. This webhook fires after each call ends with the full transcript and call analysis
+
+Without this configuration, calls will be tracked in Supabase but will NOT sync to the CallLock Dashboard.
 
 ### Step 6: Set Greeting Message
 
