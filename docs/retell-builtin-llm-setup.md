@@ -233,6 +233,21 @@ Under **General Settings** → **Begin Message**:
 Thanks for calling ACE Cooling! What's going on with your AC or heating?
 ```
 
+### Step 7: Configure Caller ID Phone Skip (Optional)
+
+To automatically skip asking for phone number when caller ID is available:
+
+1. In **Agent Settings** → **General** → **Dynamic Variables**, add:
+   - Variable name: `customer_phone`
+   - Value: `{{call.from_number}}` (for inbound calls)
+
+2. Update the system prompt to include this line after the FLOW section:
+```
+CALLER ID: Customer phone from caller ID: {{customer_phone}}. If this has a value (not empty), do NOT ask for their phone number—skip directly to checking calendar availability.
+```
+
+This prevents the AI from asking "What's the best number to reach you?" when the phone is already captured from caller ID.
+
 ## Environment Variables
 
 Make sure these are set on your Render server:

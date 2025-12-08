@@ -308,9 +308,42 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
 interface RetellFunctionWebhook {
   call: {
     call_id: string;
+    from_number?: string;
+    to_number?: string;
+    direction?: "inbound" | "outbound";
     [key: string]: unknown;
   };
   args: Record<string, unknown>;
+}
+
+// Track conversation state across webhook calls (for Retell built-in LLM)
+const webhookCallStates = new Map<string, ConversationState>();
+
+/**
+ * Get or create conversation state for a call
+ */
+function getOrCreateWebhookState(call: RetellFunctionWebhook["call"]): ConversationState {
+  const callId = call.call_id;
+
+  if (!webhookCallStates.has(callId)) {
+    // Determine call direction and customer phone from caller ID
+    const direction = call.direction || (call.from_number ? "inbound" : "outbound");
+    const customerPhone = direction === "inbound" ? call.from_number : call.to_number;
+
+    webhookCallStates.set(callId, {
+      callId,
+      callDirection: direction,
+      customerPhone: customerPhone || undefined,
+      phoneFromCallerId: Boolean(customerPhone),
+      appointmentBooked: false,
+      isSafetyEmergency: false,
+      isUrgentEscalation: false,
+    });
+
+    logger.info({ callId, direction, hasCallerIdPhone: Boolean(customerPhone) }, "Created webhook call state");
+  }
+
+  return webhookCallStates.get(callId)!;
 }
 
 /**
@@ -320,14 +353,16 @@ app.post("/webhook/retell/validate_service_area", async (req: Request, res: Resp
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const callId = call?.call_id || "unknown";
+    const state = getOrCreateWebhookState(call);
 
-    logger.info({ callId, args }, "validate_service_area called");
+    logger.info({ callId: state.callId, args }, "validate_service_area called");
 
     const zipCode = args.zip_code as string;
     const result = await validateServiceArea({ zipCode });
 
-    logger.info({ callId, latencyMs: Date.now() - startTime }, "validate_service_area completed");
+    // Track validated ZIP in state (extract from service address later if needed)
+
+    logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "validate_service_area completed");
     return res.json(result);
   } catch (error) {
     logger.error({ error }, "validate_service_area failed");
@@ -342,9 +377,9 @@ app.post("/webhook/retell/check_calendar_availability", async (req: Request, res
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const callId = call?.call_id || "unknown";
+    const state = getOrCreateWebhookState(call);
 
-    logger.info({ callId, args }, "check_calendar_availability called");
+    logger.info({ callId: state.callId, args }, "check_calendar_availability called");
 
     const urgency = (args.urgency as string) || "Routine";
     const preferredDate = args.preferred_date as string | undefined;
@@ -353,7 +388,10 @@ app.post("/webhook/retell/check_calendar_availability", async (req: Request, res
       preferredDate
     });
 
-    logger.info({ callId, latencyMs: Date.now() - startTime }, "check_calendar_availability completed");
+    // Track urgency in state
+    state.urgency = urgency as UrgencyLevel;
+
+    logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "check_calendar_availability completed");
     return res.json(result);
   } catch (error) {
     logger.error({ error }, "check_calendar_availability failed");
@@ -368,9 +406,9 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const callId = call?.call_id || "unknown";
+    const state = getOrCreateWebhookState(call);
 
-    logger.info({ callId, args }, "book_appointment called");
+    logger.info({ callId: state.callId, args }, "book_appointment called");
 
     const bookingUrgency = (args.urgency as string) || "Routine";
     const result = await bookAppointment({
@@ -383,7 +421,19 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
       problemDescription: args.problem_description as string,
     });
 
-    logger.info({ callId, latencyMs: Date.now() - startTime }, "book_appointment completed");
+    // Track booking details in state
+    if (result.success && result.appointmentId) {
+      state.appointmentBooked = true;
+      state.appointmentId = result.appointmentId;
+      state.appointmentDateTime = args.date_time as string;
+      state.customerPhone = args.customer_phone as string;
+      state.customerName = args.customer_name as string | undefined;
+      state.serviceAddress = args.service_address as string;
+      state.problemDescription = args.problem_description as string;
+      state.urgency = bookingUrgency as UrgencyLevel;
+    }
+
+    logger.info({ callId: state.callId, latencyMs: Date.now() - startTime, booked: result.success }, "book_appointment completed");
     return res.json(result);
   } catch (error) {
     logger.error({ error }, "book_appointment failed");
@@ -398,9 +448,9 @@ app.post("/webhook/retell/send_emergency_alert", async (req: Request, res: Respo
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const callId = call?.call_id || "unknown";
+    const state = getOrCreateWebhookState(call);
 
-    logger.info({ callId, args }, "send_emergency_alert called");
+    logger.info({ callId: state.callId, args }, "send_emergency_alert called");
 
     const result = await sendEmergencyAlert({
       urgencyDescription: args.urgency_description as string,
@@ -409,7 +459,13 @@ app.post("/webhook/retell/send_emergency_alert", async (req: Request, res: Respo
       callbackMinutes: 15,
     });
 
-    logger.info({ callId, latencyMs: Date.now() - startTime }, "send_emergency_alert completed");
+    // Track emergency escalation in state
+    state.isUrgentEscalation = true;
+    state.customerPhone = args.caller_phone as string;
+    state.serviceAddress = args.address as string;
+    state.problemDescription = args.urgency_description as string;
+
+    logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "send_emergency_alert completed");
     return res.json(result);
   } catch (error) {
     logger.error({ error }, "send_emergency_alert failed");
@@ -418,15 +474,40 @@ app.post("/webhook/retell/send_emergency_alert", async (req: Request, res: Respo
 });
 
 /**
- * End call - just acknowledge (Retell handles the actual call termination)
+ * End call - save state to Supabase for dashboard integration
  */
 app.post("/webhook/retell/end_call", async (req: Request, res: Response) => {
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const callId = call?.call_id || "unknown";
+    const state = getOrCreateWebhookState(call);
+    const reason = args.reason as string;
 
-    logger.info({ callId, reason: args.reason }, "end_call called");
-    return res.json({ success: true, reason: args.reason });
+    // Update state with end call reason (cast to EndCallReason type)
+    state.endCallReason = reason as ConversationState["endCallReason"];
+    if (reason === "safety_emergency") {
+      state.isSafetyEmergency = true;
+    }
+    if (reason === "urgent_escalation") {
+      state.isUrgentEscalation = true;
+    }
+
+    logger.info({ callId: state.callId, reason, state }, "end_call called - saving state");
+
+    // Save state to Supabase for post-call webhook to retrieve
+    try {
+      await saveCallSession(state);
+      logger.info({ callId: state.callId }, "Call state saved to Supabase");
+    } catch (saveError) {
+      logger.error({ callId: state.callId, error: saveError }, "Failed to save call state to Supabase");
+    }
+
+    // Clean up in-memory state after a delay (give post-call webhook time to fire)
+    setTimeout(() => {
+      webhookCallStates.delete(state.callId);
+      logger.debug({ callId: state.callId }, "Cleaned up webhook call state");
+    }, 60000); // 60 second delay
+
+    return res.json({ success: true, reason });
   } catch (error) {
     logger.error({ error }, "end_call failed");
     return res.status(500).json({ error: "Tool execution failed" });
