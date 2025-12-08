@@ -99,6 +99,11 @@ function buildAiSummary(
       urgent_escalation: "Urgent - Escalated to on-call technician",
       out_of_area: "Out of service area",
       waitlist_added: "Added to waitlist",
+      human_callback_requested: "Customer requested human callback",
+      complaint_escalation: "Complaint - Escalated to management",
+      maintenance_booked: "Maintenance appointment booked",
+      second_opinion_booked: "Second opinion appointment booked",
+      new_install_lead: "New install lead - Sales follow-up",
     };
     parts.push(`Outcome: ${outcomeMap[state.endCallReason] || state.endCallReason}`);
   }
