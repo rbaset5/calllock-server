@@ -465,6 +465,16 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
       state.serviceAddress = args.service_address as string;
       state.problemDescription = args.problem_description as string;
       state.urgency = bookingUrgency as UrgencyLevel;
+      // Diagnostic context fields from Problem Clarification phase
+      state.problemDuration = args.problem_duration as string | undefined;
+      state.problemOnset = args.problem_onset as string | undefined;
+      state.problemPattern = args.problem_pattern as string | undefined;
+      state.customerAttemptedFixes = args.customer_attempted_fixes as string | undefined;
+      // Equipment details (captured when customer volunteers)
+      state.equipmentType = args.equipment_type as string | undefined;
+      state.equipmentBrand = args.equipment_brand as string | undefined;
+      state.equipmentLocation = args.equipment_location as string | undefined;
+      state.equipmentAge = args.equipment_age as string | undefined;
     }
 
     logger.info({ callId: state.callId, latencyMs: Date.now() - startTime, booked: result.success }, "book_appointment completed");
@@ -498,6 +508,12 @@ app.post("/webhook/retell/send_emergency_alert", async (req: Request, res: Respo
     state.customerPhone = args.caller_phone as string;
     state.serviceAddress = args.address as string;
     state.problemDescription = args.urgency_description as string;
+    // Diagnostic context fields from Problem Clarification phase
+    state.problemDuration = args.problem_duration as string | undefined;
+    state.problemOnset = args.problem_onset as string | undefined;
+    // Equipment details (captured when customer volunteers)
+    state.equipmentType = args.equipment_type as string | undefined;
+    state.equipmentLocation = args.equipment_location as string | undefined;
 
     logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "send_emergency_alert completed");
     return res.json(result);
@@ -531,6 +547,18 @@ app.post("/webhook/retell/end_call", async (req: Request, res: Response) => {
     if (args.customer_address) state.serviceAddress = args.customer_address as string;
     if (args.problem_description) state.problemDescription = args.problem_description as string;
     if (args.urgency) state.urgency = args.urgency as UrgencyLevel;
+
+    // Capture diagnostic context fields
+    if (args.problem_duration) state.problemDuration = args.problem_duration as string;
+    if (args.problem_onset) state.problemOnset = args.problem_onset as string;
+    if (args.problem_pattern) state.problemPattern = args.problem_pattern as string;
+    if (args.customer_attempted_fixes) state.customerAttemptedFixes = args.customer_attempted_fixes as string;
+
+    // Capture equipment details
+    if (args.equipment_type) state.equipmentType = args.equipment_type as string;
+    if (args.equipment_brand) state.equipmentBrand = args.equipment_brand as string;
+    if (args.equipment_location) state.equipmentLocation = args.equipment_location as string;
+    if (args.equipment_age) state.equipmentAge = args.equipment_age as string;
 
     logger.info({ callId: state.callId, reason, state }, "end_call called - saving state");
 

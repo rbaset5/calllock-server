@@ -92,6 +92,38 @@ const tools: Anthropic.Tool[] = [
           type: "string",
           description: "Brief description of the HVAC problem",
         },
+        problemDuration: {
+          type: "string",
+          description: "How long the issue has been occurring (e.g., '2 days', 'since yesterday')",
+        },
+        problemOnset: {
+          type: "string",
+          description: "What triggered or preceded the issue (e.g., 'after power outage', 'gradual')",
+        },
+        problemPattern: {
+          type: "string",
+          description: "When/how the issue occurs (e.g., 'constant', 'intermittent', 'only at night')",
+        },
+        customerAttemptedFixes: {
+          type: "string",
+          description: "What the customer has already tried (e.g., 'checked filter', 'reset thermostat')",
+        },
+        equipmentType: {
+          type: "string",
+          description: "Type of equipment if mentioned (e.g., 'AC unit', 'furnace', 'heat pump', 'mini-split')",
+        },
+        equipmentBrand: {
+          type: "string",
+          description: "Brand of equipment if mentioned (e.g., 'Carrier', 'Trane', 'Lennox')",
+        },
+        equipmentLocation: {
+          type: "string",
+          description: "Location of equipment if mentioned (e.g., 'attic', 'backyard', 'basement', 'garage')",
+        },
+        equipmentAge: {
+          type: "string",
+          description: "Age of equipment if mentioned (e.g., '10 years old', 'installed last year')",
+        },
       },
       required: [
         "dateTime",
@@ -146,6 +178,22 @@ const tools: Anthropic.Tool[] = [
           type: "string",
           description:
             "Short description of the emergency (e.g., 'No heat, elderly in home')",
+        },
+        problemDuration: {
+          type: "string",
+          description: "How long the issue has been occurring",
+        },
+        problemOnset: {
+          type: "string",
+          description: "What triggered the issue",
+        },
+        equipmentType: {
+          type: "string",
+          description: "Type of equipment if mentioned (e.g., 'furnace', 'AC unit')",
+        },
+        equipmentLocation: {
+          type: "string",
+          description: "Location of equipment if mentioned (e.g., 'attic', 'basement')",
         },
         callerPhone: {
           type: "string",

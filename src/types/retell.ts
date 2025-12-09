@@ -241,6 +241,16 @@ export interface ConversationState {
   urgencyTier?: UrgencyTier;
   urgency?: UrgencyLevel; // Legacy for calendar
   problemDescription?: string;
+  // Diagnostic context fields (captured during Problem Clarification phase)
+  problemDuration?: string;          // "2 days", "since yesterday", "few hours"
+  problemOnset?: string;             // "after power outage", "after storm", "gradual"
+  problemPattern?: string;           // "constant", "intermittent", "only at night"
+  customerAttemptedFixes?: string;   // "checked filter", "reset thermostat"
+  // Equipment details (captured when customer volunteers, not asked)
+  equipmentType?: string;            // "AC unit", "furnace", "heat pump", "mini-split"
+  equipmentBrand?: string;           // "Carrier", "Trane", "Lennox"
+  equipmentLocation?: string;        // "attic", "backyard", "basement", "garage"
+  equipmentAge?: string;             // "10 years old", "new last year"
   appointmentBooked: boolean;
   appointmentId?: string;
   appointmentDateTime?: string;

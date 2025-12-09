@@ -84,6 +84,34 @@ function buildAiSummary(
     parts.push(`Issue: ${state.problemDescription}`);
   }
 
+  // Include diagnostic context fields from Problem Clarification phase
+  if (state.problemDuration) {
+    parts.push(`Duration: ${state.problemDuration}`);
+  }
+  if (state.problemOnset) {
+    parts.push(`Onset: ${state.problemOnset}`);
+  }
+  if (state.problemPattern) {
+    parts.push(`Pattern: ${state.problemPattern}`);
+  }
+  if (state.customerAttemptedFixes) {
+    parts.push(`Tried: ${state.customerAttemptedFixes}`);
+  }
+
+  // Include equipment details if captured (formatted nicely)
+  const equipmentParts: string[] = [];
+  if (state.equipmentBrand) equipmentParts.push(state.equipmentBrand);
+  if (state.equipmentType) equipmentParts.push(state.equipmentType);
+  if (state.equipmentLocation || state.equipmentAge) {
+    const details: string[] = [];
+    if (state.equipmentLocation) details.push(state.equipmentLocation);
+    if (state.equipmentAge) details.push(state.equipmentAge);
+    equipmentParts.push(`(${details.join(", ")})`);
+  }
+  if (equipmentParts.length > 0) {
+    parts.push(`Equipment: ${equipmentParts.join(" ")}`);
+  }
+
   // Include HVAC issue type
   if (state.hvacIssueType) {
     parts.push(`Type: ${state.hvacIssueType}`);

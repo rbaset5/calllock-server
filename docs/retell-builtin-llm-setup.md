@@ -107,67 +107,39 @@ Add these tools in the **Functions** section:
 }
 ```
 
-#### Tool 2: check_calendar_availability
+#### Tool 2: check_availability_cal (Retell Built-in)
+
+This is a **Retell built-in Cal.com tool**. Configure it in the Retell Dashboard:
+
 ```json
 {
-  "name": "check_calendar_availability",
-  "description": "Check available appointment slots. Call after validating service area.",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "urgency": {
-        "type": "string",
-        "enum": ["Emergency", "Urgent", "Routine", "Estimate"],
-        "description": "Urgency level of the service request"
-      },
-      "preferred_date": {
-        "type": "string",
-        "description": "Customer's preferred date in YYYY-MM-DD format (optional)"
-      }
-    },
-    "required": ["urgency"]
-  }
+  "type": "check_availability_cal",
+  "name": "check_availability_cal",
+  "description": "Check available appointment slots.",
+  "event_type_id": 3877847,
+  "cal_api_key": "your_cal_api_key_here",
+  "timezone": "America/Los_Angeles"
 }
 ```
 
-#### Tool 3: book_appointment
+**Note:** This is NOT a custom webhook - Retell handles Cal.com integration directly for faster response times.
+
+#### Tool 3: book_appointment_cal (Retell Built-in)
+
+This is a **Retell built-in Cal.com tool**. Configure it in the Retell Dashboard:
+
 ```json
 {
-  "name": "book_appointment",
-  "description": "Book a confirmed appointment after customer selects a time slot.",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "date_time": {
-        "type": "string",
-        "description": "Use the exact isoDateTime from the selected calendar slot"
-      },
-      "customer_name": {
-        "type": "string",
-        "description": "Customer's full name (if provided)"
-      },
-      "customer_phone": {
-        "type": "string",
-        "description": "Customer's phone number"
-      },
-      "service_address": {
-        "type": "string",
-        "description": "Full service address including street, city, state, zip"
-      },
-      "urgency": {
-        "type": "string",
-        "enum": ["Emergency", "Urgent", "Routine", "Estimate"],
-        "description": "Urgency level"
-      },
-      "problem_description": {
-        "type": "string",
-        "description": "Brief description of the HVAC problem"
-      }
-    },
-    "required": ["date_time", "customer_phone", "service_address", "problem_description"]
-  }
+  "type": "book_appointment_cal",
+  "name": "book_appointment_cal",
+  "description": "Book an appointment on the calendar.",
+  "event_type_id": 3877847,
+  "cal_api_key": "your_cal_api_key_here",
+  "timezone": "America/Los_Angeles"
 }
 ```
+
+**Note:** Since this is a Retell built-in tool, appointment data is captured via the post-call webhook (Step 5b) rather than during the tool call itself.
 
 #### Tool 4: send_emergency_alert
 ```json
@@ -199,7 +171,7 @@ Add these tools in the **Functions** section:
 ```json
 {
   "name": "end_call",
-  "description": "End the call. MUST be called to end every conversation. Pass any customer info collected.",
+  "description": "End the call. MUST be called to end every conversation. Pass any customer info and diagnostic details collected.",
   "parameters": {
     "type": "object",
     "properties": {
@@ -228,6 +200,38 @@ Add these tools in the **Functions** section:
         "type": "string",
         "enum": ["Emergency", "Urgent", "Routine", "Estimate"],
         "description": "Urgency level if determined"
+      },
+      "problem_duration": {
+        "type": "string",
+        "description": "How long the problem has been occurring (e.g., '2 days', 'since yesterday')"
+      },
+      "problem_onset": {
+        "type": "string",
+        "description": "What triggered or preceded the problem (e.g., 'after power outage', 'gradual')"
+      },
+      "problem_pattern": {
+        "type": "string",
+        "description": "Pattern of the problem (e.g., 'constant', 'intermittent', 'only at night')"
+      },
+      "customer_attempted_fixes": {
+        "type": "string",
+        "description": "What the customer has already tried (e.g., 'checked filter', 'reset thermostat')"
+      },
+      "equipment_type": {
+        "type": "string",
+        "description": "Type of equipment (e.g., 'AC unit', 'furnace', 'heat pump')"
+      },
+      "equipment_brand": {
+        "type": "string",
+        "description": "Brand of equipment if mentioned (e.g., 'Carrier', 'Trane', 'Lennox')"
+      },
+      "equipment_location": {
+        "type": "string",
+        "description": "Where the equipment is located (e.g., 'attic', 'backyard', 'basement')"
+      },
+      "equipment_age": {
+        "type": "string",
+        "description": "Age of the equipment if mentioned (e.g., '10 years old', 'new last year')"
       }
     },
     "required": ["reason"]
@@ -235,17 +239,21 @@ Add these tools in the **Functions** section:
 }
 ```
 
-### Step 5: Configure API Endpoints for Each Tool
+### Step 5: Configure Tools (Current Architecture)
 
-Each function needs its own API endpoint URL:
+The system uses a hybrid approach with **Retell built-in tools** for calendar operations and **custom webhook tools** for business logic:
 
-| Function | API Endpoint |
-|----------|-------------|
-| validate_service_area | `https://calllock-server.onrender.com/webhook/retell/validate_service_area` |
-| check_calendar_availability | `https://calllock-server.onrender.com/webhook/retell/check_calendar_availability` |
-| book_appointment | `https://calllock-server.onrender.com/webhook/retell/book_appointment` |
-| send_emergency_alert | `https://calllock-server.onrender.com/webhook/retell/send_emergency_alert` |
-| end_call | `https://calllock-server.onrender.com/webhook/retell/end_call` |
+| Tool | Type | URL/Config |
+|------|------|------------|
+| `validate_service_area` | Custom Webhook | `https://calllock-server.onrender.com/webhook/retell/validate_service_area` |
+| `check_availability_cal` | Retell Built-in | Cal.com integration (event_type_id: 3877847) |
+| `book_appointment_cal` | Retell Built-in | Cal.com integration (event_type_id: 3877847) |
+| `send_emergency_alert` | Custom Webhook | `https://calllock-server.onrender.com/webhook/retell/send_emergency_alert` |
+| `end_call` | Custom Webhook | `https://calllock-server.onrender.com/webhook/retell/end_call` |
+
+**Why this architecture?**
+- **Cal.com built-in tools** (`check_availability_cal`, `book_appointment_cal`): Faster response times since Retell handles the integration directly
+- **Custom webhooks** (`end_call`, `validate_service_area`, `send_emergency_alert`): Capture call data and business logic on our server for dashboard integration
 
 ### Step 5b: Configure Post-Call Webhook (IMPORTANT!)
 
