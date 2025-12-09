@@ -6,6 +6,7 @@
 import { ConversationState, UrgencyTier, EndCallReason, RetellPostCallData } from "../types/retell.js";
 import { createModuleLogger, maskPhone } from "../utils/logger.js";
 import { fetchWithRetry, FetchError } from "../utils/fetch.js";
+import { estimateRevenue, RevenueEstimate } from "./revenue-estimation.js";
 
 const log = createModuleLogger("dashboard");
 
@@ -35,6 +36,14 @@ export interface DashboardJobPayload {
   scheduled_at?: string;
   call_transcript?: string;
   user_email: string;
+  // Revenue estimation fields
+  estimated_value?: number;
+  estimated_revenue_low?: number;
+  estimated_revenue_high?: number;
+  estimated_revenue_display?: string;
+  revenue_confidence?: "low" | "medium" | "high";
+  revenue_factors?: string[];
+  potential_replacement?: boolean;
 }
 
 /**
@@ -149,6 +158,9 @@ export function transformToDashboardPayload(
   state: ConversationState,
   retellData?: RetellPostCallData
 ): DashboardJobPayload {
+  // Calculate revenue estimate
+  const estimate = estimateRevenue(state);
+
   return {
     customer_name: state.customerName || state.customerPhone || "Unknown Caller",
     customer_phone: state.customerPhone || "Unknown",
@@ -159,6 +171,14 @@ export function transformToDashboardPayload(
     scheduled_at: state.appointmentDateTime,
     call_transcript: retellData?.transcript,
     user_email: DASHBOARD_USER_EMAIL!,
+    // Revenue estimation
+    estimated_value: estimate.midpoint,
+    estimated_revenue_low: estimate.lowEstimate,
+    estimated_revenue_high: estimate.highEstimate,
+    estimated_revenue_display: estimate.displayRange,
+    revenue_confidence: estimate.confidence,
+    revenue_factors: estimate.factors,
+    potential_replacement: estimate.potentialReplacement,
   };
 }
 
