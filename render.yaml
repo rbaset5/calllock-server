@@ -55,3 +55,15 @@ services:
         sync: false
       - key: TWILIO_FROM_NUMBER
         sync: false
+
+      # CallLock Dashboard Integration
+      - key: DASHBOARD_WEBHOOK_URL
+        sync: false
+      - key: DASHBOARD_WEBHOOK_SECRET
+        sync: false
+      - key: DASHBOARD_USER_EMAIL
+        sync: false
+
+      # Keep-alive ping
+      - key: RENDER_URL
+        sync: false
