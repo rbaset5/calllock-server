@@ -292,9 +292,25 @@ export interface RetellPostCallData {
   disconnection_reason?: string;
 }
 
+/**
+ * Custom analysis data extracted by Retell's post-call AI analysis
+ * These fields are configured in the Retell agent's post_call_analysis_data
+ */
+export interface CustomAnalysisData {
+  customer_name?: string;
+  service_address?: string;
+  problem_description?: string;
+  problem_duration?: string;
+  problem_pattern?: string;
+  equipment_type?: string;
+  equipment_brand?: string;
+  equipment_age?: string;
+  urgency_level?: string;
+}
+
 export interface RetellCallAnalysis {
   call_summary?: string;
   user_sentiment?: "positive" | "neutral" | "negative";
   call_successful?: boolean;
-  custom_analysis_data?: Record<string, unknown>;
+  custom_analysis_data?: CustomAnalysisData;
 }

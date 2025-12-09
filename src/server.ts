@@ -231,35 +231,65 @@ app.post("/api/bookings/reschedule", async (req: Request, res: Response) => {
 // ============================================
 
 /**
+ * Map urgency level string from post-call analysis to UrgencyLevel type
+ */
+function mapUrgencyLevelFromAnalysis(urgencyLevel?: string): UrgencyLevel | undefined {
+  if (!urgencyLevel) return undefined;
+  const normalized = urgencyLevel.toLowerCase();
+  if (normalized.includes("emergency")) return "Emergency";
+  if (normalized.includes("urgent")) return "Urgent";
+  if (normalized.includes("routine")) return "Routine";
+  if (normalized.includes("estimate")) return "Estimate";
+  return undefined;
+}
+
+/**
+ * Extract address from transcript using regex (fallback when custom analysis unavailable)
+ */
+function extractAddressFromTranscript(transcript?: string): string | undefined {
+  if (!transcript) return undefined;
+  const addressMatch = transcript.match(
+    /(\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Court|Ct|Lane|Ln|Way|Boulevard|Blvd)[,\s]+[\w\s]+,?\s*(?:Texas|TX)?\s*\d{5})/i
+  );
+  return addressMatch ? addressMatch[1].trim() : undefined;
+}
+
+/**
  * Extract conversation state from post-call webhook data
- * Used when no saved session exists (e.g., user hung up, built-in Cal.com tools used)
+ * Uses Retell's custom_analysis_data when available (AI-extracted fields)
+ * Falls back to basic extraction for older calls or when analysis unavailable
  */
 function extractStateFromPostCallData(callData: RetellPostCallData): ConversationState {
+  const custom = callData.call_analysis?.custom_analysis_data;
+
   // Extract phone from caller ID based on call direction
   const customerPhone = callData.direction === "inbound"
     ? callData.from_number
     : callData.to_number;
 
-  // Try to extract address from transcript (look for address patterns)
-  let serviceAddress: string | undefined;
-  if (callData.transcript) {
-    // Look for common address patterns in transcript
-    const addressMatch = callData.transcript.match(
-      /(\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Court|Ct|Lane|Ln|Way|Boulevard|Blvd)[,\s]+[\w\s]+,?\s*(?:Texas|TX)?\s*\d{5})/i
-    );
-    if (addressMatch) {
-      serviceAddress = addressMatch[1].trim();
-    }
-  }
+  // Prefer custom analysis data, fall back to regex for address
+  const serviceAddress = custom?.service_address || extractAddressFromTranscript(callData.transcript);
 
   // Determine if appointment was booked based on call analysis
   const appointmentBooked = callData.call_analysis?.call_successful === true;
 
   return {
     callId: callData.call_id,
+    // Customer info - prefer custom analysis
+    customerName: custom?.customer_name,
     customerPhone,
     serviceAddress,
-    problemDescription: callData.call_analysis?.call_summary,
+    // Problem details - prefer custom analysis, fall back to summary
+    problemDescription: custom?.problem_description || callData.call_analysis?.call_summary,
+    problemDuration: custom?.problem_duration,
+    problemPattern: custom?.problem_pattern,
+    // Equipment details from custom analysis
+    equipmentType: custom?.equipment_type,
+    equipmentBrand: custom?.equipment_brand,
+    equipmentAge: custom?.equipment_age,
+    // Urgency from custom analysis
+    urgency: mapUrgencyLevelFromAnalysis(custom?.urgency_level),
+    // Call metadata
     callDirection: callData.direction,
     appointmentBooked,
     isSafetyEmergency: false,

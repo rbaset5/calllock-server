@@ -290,6 +290,38 @@ CALLER ID: Customer phone from caller ID: {{customer_phone}}. If this has a valu
 
 This prevents the AI from asking "What's the best number to reach you?" when the phone is already captured from caller ID.
 
+## Post-Call Analysis (Automatic Data Extraction)
+
+The system uses Retell's **post-call analysis** feature to automatically extract structured data from every call transcript. This ensures data is captured even when:
+- User hangs up before `end_call` is called
+- Built-in Cal.com tools are used (which don't save to our server)
+- Any unexpected call termination
+
+### Configured Fields
+
+These fields are extracted by Retell's AI after each call:
+
+| Field | Description |
+|-------|-------------|
+| `customer_name` | Customer's name if mentioned |
+| `service_address` | Full address including street, city, state, ZIP |
+| `problem_description` | Brief description of the HVAC issue |
+| `problem_duration` | How long the problem has occurred |
+| `problem_pattern` | Pattern: constant, intermittent, etc. |
+| `equipment_type` | AC unit, furnace, heat pump, etc. |
+| `equipment_brand` | Carrier, Trane, Lennox, etc. |
+| `equipment_age` | Age of equipment if mentioned |
+| `urgency_level` | Emergency, Urgent, Routine, or Estimate |
+
+### How It Works
+
+1. Call ends (user hangs up or call completed)
+2. Retell processes the transcript with AI (using `gpt-4.1-mini`)
+3. Extracted data appears in `call_analysis.custom_analysis_data`
+4. Our server uses this data when no saved session exists
+
+This provides reliable fallback data extraction without complex regex parsing.
+
 ## Environment Variables
 
 Make sure these are set on your Render server:
