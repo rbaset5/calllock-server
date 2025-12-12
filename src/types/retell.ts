@@ -149,8 +149,8 @@ export type UrgencyTier = "LifeSafety" | "Urgent" | "Routine";
 // Legacy urgency level for calendar availability
 export type UrgencyLevel = "Emergency" | "Urgent" | "Routine" | "Estimate";
 
-// Extended end call reasons to include urgent escalation and waitlist
-export type EndCallReason = "wrong_number" | "callback_later" | "safety_emergency" | "urgent_escalation" | "out_of_area" | "waitlist_added" | "completed";
+// Extended end call reasons to include urgent escalation, waitlist, customer hangup, and sales leads
+export type EndCallReason = "wrong_number" | "callback_later" | "safety_emergency" | "urgent_escalation" | "out_of_area" | "waitlist_added" | "completed" | "customer_hangup" | "sales_lead";
 
 export interface CalendarSlot {
   date: string;
@@ -209,6 +209,25 @@ export interface EmergencyAlertParams {
 }
 
 export interface EmergencyAlertResult {
+  success: boolean;
+  alertId?: string;
+  message: string;
+}
+
+// ============================================
+// Sales Lead Alert Types
+// ============================================
+
+export interface SalesLeadAlertParams {
+  customerName?: string;
+  customerPhone: string;
+  address?: string;
+  currentEquipment?: string;  // "AC", "furnace", "heat pump", etc.
+  equipmentAge?: string;      // "20 years", "unknown"
+  notes?: string;             // Any additional context from the call
+}
+
+export interface SalesLeadAlertResult {
   success: boolean;
   alertId?: string;
   message: string;

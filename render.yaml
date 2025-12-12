@@ -11,8 +11,6 @@ services:
         value: production
       - key: RETELL_API_KEY
         sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
 
       # Business Configuration
       - key: BUSINESS_NAME

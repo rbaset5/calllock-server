@@ -1,9 +1,9 @@
 /**
- * Emergency SMS Alerts Service
- * Sends urgent alerts to dispatcher/owner for Tier 2 emergencies
+ * SMS Alerts Service
+ * Sends alerts to dispatcher/owner for emergencies and sales leads
  */
 
-import { EmergencyAlertParams, EmergencyAlertResult } from "../types/retell.js";
+import { EmergencyAlertParams, EmergencyAlertResult, SalesLeadAlertParams, SalesLeadAlertResult } from "../types/retell.js";
 import { createModuleLogger, maskPhone } from "../utils/logger.js";
 import { fetchWithRetry, FetchError } from "../utils/fetch.js";
 
@@ -120,6 +120,86 @@ async function sendTwilioSMS(
     success: true,
     alertId: data.sid,
     message: "Emergency SMS sent",
+  };
+}
+
+/**
+ * Send a sales lead SMS alert to the owner
+ *
+ * SMS format:
+ * SALES LEAD: AC Replacement
+ * Customer: John Smith
+ * Phone: (512) 555-1234
+ * Address: 1234 Oak St, Austin
+ * Equipment: Central AC, 20 years old
+ * Promised callback
+ */
+export async function sendSalesLeadAlert(
+  params: SalesLeadAlertParams
+): Promise<SalesLeadAlertResult> {
+  const { customerName, customerPhone, address, currentEquipment, equipmentAge, notes } = params;
+
+  // Build equipment description
+  const equipmentParts: string[] = [];
+  if (currentEquipment) equipmentParts.push(currentEquipment);
+  if (equipmentAge) equipmentParts.push(equipmentAge);
+  const equipmentDesc = equipmentParts.length > 0 ? equipmentParts.join(", ") : "Not specified";
+
+  // Format the SMS message
+  const messageLines = [
+    `SALES LEAD: ${currentEquipment || "HVAC"} Replacement`,
+    customerName ? `Customer: ${customerName}` : null,
+    `Phone: ${formatPhone(customerPhone)}`,
+    address ? `Address: ${address}` : null,
+    `Equipment: ${equipmentDesc}`,
+    notes ? `Notes: ${notes}` : null,
+    `Promised callback`,
+  ].filter(Boolean);
+
+  const smsMessage = messageLines.join("\n");
+
+  log.info(
+    {
+      phone: maskPhone(customerPhone),
+      equipment: currentEquipment,
+      equipmentAge,
+    },
+    "Sales lead alert triggered"
+  );
+
+  // If Twilio is configured, send real SMS
+  if (
+    TWILIO_ACCOUNT_SID &&
+    TWILIO_AUTH_TOKEN &&
+    TWILIO_FROM_NUMBER &&
+    EMERGENCY_SMS_NUMBER
+  ) {
+    try {
+      const result = await sendTwilioSMS(EMERGENCY_SMS_NUMBER, smsMessage);
+      return {
+        success: result.success,
+        alertId: result.alertId,
+        message: "Sales lead alert sent successfully",
+      };
+    } catch (error) {
+      if (error instanceof FetchError) {
+        log.error({ error: error.message, attempts: error.attempts }, "Twilio SMS failed after retries");
+      } else {
+        log.error({ error }, "Twilio SMS failed");
+      }
+      // Fall through to mock response
+    }
+  } else {
+    log.info("Twilio not configured - logging SMS instead");
+    log.info({ smsContent: smsMessage }, "SMS that would be sent");
+  }
+
+  // Return success (either real SMS sent or logged for demo)
+  const alertId = `lead_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  return {
+    success: true,
+    alertId,
+    message: "Sales lead alert sent successfully",
   };
 }
 

@@ -44,6 +44,10 @@ export interface DashboardJobPayload {
   revenue_confidence?: "low" | "medium" | "high";
   revenue_factors?: string[];
   potential_replacement?: boolean;
+  // Call outcome for Lead creation
+  end_call_reason?: EndCallReason;
+  // Problem details for Lead
+  issue_description?: string;
 }
 
 /**
@@ -136,6 +140,8 @@ function buildAiSummary(
       urgent_escalation: "Urgent - Escalated to on-call technician",
       out_of_area: "Out of service area",
       waitlist_added: "Added to waitlist",
+      customer_hangup: "Customer hung up",
+      sales_lead: "Sales lead - Replacement inquiry",
     };
     parts.push(`Outcome: ${outcomeMap[state.endCallReason] || state.endCallReason}`);
   }
@@ -179,6 +185,9 @@ export function transformToDashboardPayload(
     revenue_confidence: estimate.confidence,
     revenue_factors: estimate.factors,
     potential_replacement: estimate.potentialReplacement,
+    // Call outcome for Lead creation (when no booking)
+    end_call_reason: state.endCallReason,
+    issue_description: state.problemDescription,
   };
 }
 

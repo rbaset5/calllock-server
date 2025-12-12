@@ -1,22 +1,14 @@
 import "dotenv/config";
 import express, { Request, Response } from "express";
-import expressWs from "express-ws";
-import { WebSocket } from "ws";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 
-import { createLLMHandler, validateLLMConfig, getLLMProvider } from "./llm/factory.js";
-import { LLMHandler } from "./llm/types.js";
 import {
-  RetellRequest,
-  RetellResponse,
-  ConfigResponse,
-  PingPongResponse,
-  ResponseResponse,
   ConversationState,
   RetellPostCallWebhook,
   RetellPostCallData,
   UrgencyLevel,
+  EndCallReason,
 } from "./types/retell.js";
 import {
   lookupBookingByPhone,
@@ -30,10 +22,10 @@ import {
   bookAppointment,
   validateServiceArea,
 } from "./functions/index.js";
-import { sendEmergencyAlert } from "./services/alerts.js";
+import { sendEmergencyAlert, sendSalesLeadAlert } from "./services/alerts.js";
 
 // Infrastructure imports
-import { logger, createCallLogger, maskPhone } from "./utils/logger.js";
+import { logger, maskPhone } from "./utils/logger.js";
 import { runHealthChecks } from "./utils/health.js";
 import { apiKeyAuth } from "./middleware/auth.js";
 import {
@@ -49,14 +41,6 @@ import {
 // ===========================================
 
 function validateEnvironment(): void {
-  const required = ["ANTHROPIC_API_KEY"];
-  const missing = required.filter((key) => !process.env[key]);
-
-  if (missing.length > 0) {
-    logger.fatal({ missing }, "Missing required environment variables");
-    process.exit(1);
-  }
-
   // Warn about optional but recommended variables
   const recommended = ["RETELL_API_KEY", "BUSINESS_NAME", "SERVICE_AREA"];
   const missingRecommended = recommended.filter((key) => !process.env[key]);
@@ -80,7 +64,7 @@ function validateEnvironment(): void {
 // Run validation before starting
 validateEnvironment();
 
-const app = expressWs(express()).app;
+const app = express();
 const PORT = process.env.PORT || 8080;
 
 // ===========================================
@@ -106,34 +90,6 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-
-// Store active conversations
-const activeConversations = new Map<string, ConversationState>();
-
-// ===========================================
-// Inaudible Speech Detection
-// ===========================================
-
-/**
- * Detect if user's speech was inaudible/unclear
- * Retell sends various patterns when it can't transcribe audio
- */
-function detectInaudible(text: string): boolean {
-  if (!text) return true;
-
-  const trimmed = text.trim().toLowerCase();
-  if (trimmed.length === 0) return true;
-
-  const inaudiblePatterns = [
-    /inaudible/i,
-    /^\[.*\]$/,           // bracketed placeholder like [unclear]
-    /^\.+$/,              // just dots/periods
-    /^\s*$/,              // whitespace only
-    /^(um|uh|hmm)\.?$/i,  // just filler sounds
-  ];
-
-  return inaudiblePatterns.some(p => p.test(trimmed));
-}
 
 // ===========================================
 // Health Check Endpoints
@@ -255,6 +211,29 @@ function extractAddressFromTranscript(transcript?: string): string | undefined {
 }
 
 /**
+ * Map Retell's disconnection_reason to our EndCallReason
+ * Retell uses reasons like: "user_hangup", "agent_hangup", "call_transfer", "voicemail", "inactivity", etc.
+ */
+function mapDisconnectionReason(reason?: string): EndCallReason | undefined {
+  if (!reason) return undefined;
+
+  const lowered = reason.toLowerCase();
+
+  // Customer hung up before conversation completed
+  if (lowered.includes("user_hangup") || lowered.includes("customer_hangup") || lowered === "hangup") {
+    return "customer_hangup";
+  }
+
+  // Call went to voicemail - treat as callback_later (they need to call back)
+  if (lowered.includes("voicemail")) {
+    return "callback_later";
+  }
+
+  // Other reasons don't map to our specific end call reasons
+  return undefined;
+}
+
+/**
  * Extract conversation state from post-call webhook data
  * Uses Retell's custom_analysis_data when available (AI-extracted fields)
  * Falls back to basic extraction for older calls or when analysis unavailable
@@ -272,6 +251,9 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
 
   // Determine if appointment was booked based on call analysis
   const appointmentBooked = callData.call_analysis?.call_successful === true;
+
+  // Determine end call reason from Retell's disconnection_reason
+  const endCallReason = mapDisconnectionReason(callData.disconnection_reason);
 
   return {
     callId: callData.call_id,
@@ -294,6 +276,8 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     appointmentBooked,
     isSafetyEmergency: false,
     isUrgentEscalation: false,
+    // End call reason from disconnection
+    endCallReason,
   };
 }
 
@@ -337,6 +321,17 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       // No saved session - extract data from post-call webhook payload
       logger.info({ callId }, "No session found, extracting from webhook data");
       conversationState = extractStateFromPostCallData(payload.call);
+    } else if (!conversationState.endCallReason && payload.call.disconnection_reason) {
+      // We have a saved session but no explicit end call reason was set
+      // This means the AI didn't call endCall - customer likely hung up
+      const mappedReason = mapDisconnectionReason(payload.call.disconnection_reason);
+      if (mappedReason) {
+        logger.info(
+          { callId, disconnectionReason: payload.call.disconnection_reason, mappedReason },
+          "Setting end call reason from disconnection_reason"
+        );
+        conversationState.endCallReason = mappedReason;
+      }
     }
 
     // Send to dashboard
@@ -554,6 +549,41 @@ app.post("/webhook/retell/send_emergency_alert", async (req: Request, res: Respo
 });
 
 /**
+ * Send sales lead alert - for replacement/new equipment inquiries
+ */
+app.post("/webhook/retell/send_sales_lead_alert", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const state = getOrCreateWebhookState(call);
+
+    logger.info({ callId: state.callId, args }, "send_sales_lead_alert called");
+
+    const result = await sendSalesLeadAlert({
+      customerName: args.customer_name as string | undefined,
+      customerPhone: args.customer_phone as string,
+      address: args.address as string | undefined,
+      currentEquipment: args.current_equipment as string | undefined,
+      equipmentAge: args.equipment_age as string | undefined,
+      notes: args.notes as string | undefined,
+    });
+
+    // Track sales lead in state
+    state.customerName = args.customer_name as string | undefined;
+    state.customerPhone = args.customer_phone as string;
+    state.serviceAddress = args.address as string | undefined;
+    state.equipmentType = args.current_equipment as string | undefined;
+    state.equipmentAge = args.equipment_age as string | undefined;
+
+    logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "send_sales_lead_alert completed");
+    return res.json(result);
+  } catch (error) {
+    logger.error({ error }, "send_sales_lead_alert failed");
+    return res.status(500).json({ error: "Tool execution failed" });
+  }
+});
+
+/**
  * End call - save state to Supabase for dashboard integration
  */
 app.post("/webhook/retell/end_call", async (req: Request, res: Response) => {
@@ -613,280 +643,12 @@ app.post("/webhook/retell/end_call", async (req: Request, res: Response) => {
   }
 });
 
-// ============================================
-// WebSocket Endpoint for Retell LLM
-// ============================================
-
-const MAX_WS_MESSAGE_SIZE = 64 * 1024; // 64KB
-
-app.ws("/llm-websocket/:callId?", (ws: WebSocket, req: Request) => {
-  const callId = req.params.callId || `call_${Date.now()}`;
-  const log = createCallLogger(callId);
-
-  log.info("WebSocket connection established");
-
-  // Initialize conversation state
-  const state: ConversationState = {
-    callId,
-    appointmentBooked: false,
-    isSafetyEmergency: false,
-    isUrgentEscalation: false,
-  };
-  activeConversations.set(callId, state);
-
-  // Initialize LLM handler (Claude or OpenAI based on LLM_PROVIDER)
-  const llm: LLMHandler = createLLMHandler(state);
-
-  // Track if we've sent the initial greeting
-  let initialGreetingSent = false;
-
-  // Message queue to prevent race conditions
-  // Ensures messages are processed sequentially
-  let messageQueue: Promise<void> = Promise.resolve();
-
-  // Send configuration on connect
-  const configResponse: ConfigResponse = {
-    response_type: "config",
-    config: {
-      auto_reconnect: true,
-      call_details: true,
-      transcript_with_tool_calls: true,
-    },
-  };
-  sendResponse(ws, configResponse);
-
-  // Handle incoming messages from Retell
-  ws.on("message", async (data: Buffer) => {
-    // Message size limit
-    if (data.length > MAX_WS_MESSAGE_SIZE) {
-      log.warn({ size: data.length }, "WebSocket message too large, ignoring");
-      return;
-    }
-
-    try {
-      const message: RetellRequest = JSON.parse(data.toString());
-      log.debug({ interactionType: message.interaction_type }, "Received message");
-
-      switch (message.interaction_type) {
-        case "ping_pong":
-          // Respond to keep-alive
-          const pongResponse: PingPongResponse = {
-            response_type: "ping_pong",
-            timestamp: message.timestamp,
-          };
-          sendResponse(ws, pongResponse);
-          break;
-
-        case "call_details":
-          // Detect call direction (inbound vs outbound)
-          const callDirection = message.call.direction || "outbound";
-          state.callDirection = callDirection;
-
-          // Capture phone number based on direction
-          if (callDirection === "inbound") {
-            // INBOUND: Customer's phone is from_number (they called us)
-            if (message.call.from_number) {
-              state.customerPhone = message.call.from_number;
-              state.phoneFromCallerId = true;
-              log.info({ direction: callDirection }, "Captured caller ID from inbound call");
-            }
-          } else {
-            // OUTBOUND: Customer's phone is to_number (we called them)
-            if (message.call.to_number) {
-              state.customerPhone = message.call.to_number;
-            }
-          }
-
-          if (message.call.metadata) {
-            log.info({ metadata: message.call.metadata, direction: callDirection }, "Call metadata received");
-          }
-
-          // Send initial greeting based on call direction
-          if (!initialGreetingSent) {
-            initialGreetingSent = true;
-            const greeting = llm.getInitialGreeting(callDirection);
-            const greetingResponse: ResponseResponse = {
-              response_type: "response",
-              response_id: 0,
-              content: greeting,
-              content_complete: true,
-              end_call: false,
-            };
-            sendResponse(ws, greetingResponse);
-            log.info({ direction: callDirection }, "Sent initial greeting");
-          }
-          break;
-
-        case "update_only":
-          // Just a transcript update, no response needed
-          log.debug("Transcript update (no response needed)");
-          break;
-
-        case "response_required":
-          // User said something, we need to respond
-          // Queue message processing to prevent race conditions
-          const transcript = message.transcript;
-          const responseId = message.response_id;
-
-          log.info({ responseId }, "Response required, queuing for processing");
-
-          // Check if the last user message is inaudible/unclear
-          const lastUserMsg = transcript.filter((m: { role: string }) => m.role === "user").pop();
-          const isInaudible = lastUserMsg && detectInaudible(lastUserMsg.content);
-
-          if (isInaudible) {
-            log.info({ responseId }, "Detected inaudible speech, sending clarification request");
-            const clarifyResponse: ResponseResponse = {
-              response_type: "response",
-              response_id: responseId,
-              content: "I'm sorry, I didn't quite catch that. Could you say that again?",
-              content_complete: true,
-              end_call: false,
-            };
-            sendResponse(ws, clarifyResponse);
-            break;
-          }
-
-          // Chain onto the message queue to ensure sequential processing
-          messageQueue = messageQueue.then(async () => {
-            const processingStart = Date.now();
-            log.info({ responseId }, "Processing queued message");
-
-            try {
-              // Callback to send intermediate responses (e.g., transition phrases) before tool execution
-              const onIntermediateResponse = (text: string) => {
-                log.info({ responseId, text }, "Sending intermediate response");
-                const intermediateResponse: ResponseResponse = {
-                  response_type: "response",
-                  response_id: responseId,
-                  content: text,
-                  content_complete: false, // More content coming after tool execution
-                  end_call: false,
-                };
-                sendResponse(ws, intermediateResponse);
-              };
-
-              const { content, endCall, transferNumber } = await llm.generateResponse(
-                transcript,
-                onIntermediateResponse
-              );
-
-              const response: ResponseResponse = {
-                response_type: "response",
-                response_id: responseId,
-                content,
-                content_complete: true,
-                end_call: endCall,
-                transfer_number: transferNumber,
-              };
-              sendResponse(ws, response);
-              log.info(
-                { responseId, endCall, hasTransfer: !!transferNumber, processingMs: Date.now() - processingStart },
-                "Sent response"
-              );
-            } catch (error) {
-              log.error({ error, responseId }, "Error generating response");
-              // Send fallback response
-              const fallbackResponse: ResponseResponse = {
-                response_type: "response",
-                response_id: responseId,
-                content: "I'm sorry, I didn't quite catch that. Could you say that again?",
-                content_complete: true,
-                end_call: false,
-              };
-              sendResponse(ws, fallbackResponse);
-            }
-          }).catch((error) => {
-            log.error({ error, responseId }, "Queue processing error");
-            // IMPORTANT: Send error response to Retell so it doesn't hang
-            const errorResponse: ResponseResponse = {
-              response_type: "response",
-              response_id: responseId,
-              content: "I'm sorry, I didn't quite catch that. Could you say that again?",
-              content_complete: true,
-              end_call: false,
-            };
-            sendResponse(ws, errorResponse);
-          });
-          break;
-
-        case "reminder_required":
-          // User has been silent, send a reminder
-          log.info("Reminder required");
-          const reminderResponseId = message.response_id;
-          const reminder = llm.getReminder();
-
-          const reminderResponse: ResponseResponse = {
-            response_type: "response",
-            response_id: reminderResponseId,
-            content: reminder,
-            content_complete: true,
-            end_call: false,
-          };
-          sendResponse(ws, reminderResponse);
-          break;
-
-        default:
-          log.warn({ interactionType: (message as any).interaction_type }, "Unknown interaction type");
-      }
-    } catch (error) {
-      log.error({ error }, "Error processing message");
-    }
-  });
-
-  ws.on("close", async () => {
-    log.info("WebSocket connection closed");
-
-    // Log final conversation state (without PII)
-    const finalState = activeConversations.get(callId);
-    if (finalState) {
-      log.info(
-        {
-          appointmentBooked: finalState.appointmentBooked,
-          serviceType: finalState.serviceType,
-          urgency: finalState.urgency,
-          endCallReason: finalState.endCallReason,
-          isSafetyEmergency: finalState.isSafetyEmergency,
-          isUrgentEscalation: finalState.isUrgentEscalation,
-        },
-        "Final conversation state"
-      );
-
-      // Save session to Supabase for post-call webhook processing
-      // This allows us to retrieve the conversation state when Retell's
-      // post-call webhook fires (after audio processing completes)
-      try {
-        await saveCallSession(finalState);
-      } catch (error) {
-        log.error({ error, callId }, "Failed to save call session");
-      }
-    }
-
-    activeConversations.delete(callId);
-  });
-
-  ws.on("error", (error) => {
-    log.error({ error }, "WebSocket error");
-  });
-});
-
-// Helper function to send responses
-function sendResponse(ws: WebSocket, response: RetellResponse) {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(response));
-  }
-}
-
 // ===========================================
 // Start Server
 // ===========================================
 
-// Validate LLM configuration before starting
-validateLLMConfig();
-
 const server = app.listen(PORT, () => {
-  logger.info({ port: PORT, llmProvider: getLLMProvider() }, "CallLock HVAC Retell Server started");
-  logger.info({ wsEndpoint: `ws://localhost:${PORT}/llm-websocket` }, "WebSocket endpoint ready");
+  logger.info({ port: PORT }, "CallLock HVAC Retell Server started");
   logger.info({ healthCheck: `http://localhost:${PORT}/health` }, "Health check ready");
 
   // Keep-alive ping for Render free tier (prevents spin-down)
@@ -910,12 +672,6 @@ const server = app.listen(PORT, () => {
 
 function gracefulShutdown(signal: string) {
   logger.info({ signal }, "Graceful shutdown initiated");
-
-  // Log active conversations
-  const activeCount = activeConversations.size;
-  if (activeCount > 0) {
-    logger.warn({ activeCount }, "Active conversations will be terminated");
-  }
 
   // Close HTTP server (stop accepting new connections)
   server.close(() => {

@@ -109,6 +109,33 @@ VARIABLES:
 └─────────────┘
 ```
 
+## Sales/Replacement Inquiries
+
+When customer wants a new unit or replacement (not a repair):
+
+**Triggers:**
+- "I need a new AC"
+- "My system is 20 years old"
+- "Want to replace my furnace"
+- "Looking for a new unit"
+
+**Flow:**
+1. Acknowledge: "I can have the owner call you back to discuss replacement options."
+2. Collect: name, phone, address, what equipment, how old
+3. Call `send_sales_lead_alert` with details
+4. Confirm: "Great, the owner will call you back shortly."
+5. Call `end_call(reason="sales_lead")`
+
+**SMS sent to owner:**
+```
+SALES LEAD: AC Replacement
+Customer: John Smith
+Phone: (512) 555-1234
+Address: 1234 Oak St, Austin
+Equipment: Central AC, 20 years old
+Promised callback
+```
+
 ## Emergency Tiers
 
 | Tier | Triggers | Action |
@@ -183,6 +210,12 @@ Sends SMS alert for Tier 2 urgent calls via Twilio.
 - **Args:** `{ urgency_description, caller_phone, address }`
 - **Returns:** `{ success: boolean, alertId?, message: string }`
 - **Side Effect:** Sends SMS to `EMERGENCY_SMS_NUMBER`
+
+### `POST /webhook/retell/send_sales_lead_alert`
+Sends SMS alert for replacement/sales inquiries.
+- **Args:** `{ customer_name?, customer_phone, address?, current_equipment?, equipment_age?, notes? }`
+- **Returns:** `{ success: boolean, alertId?, message: string }`
+- **Side Effect:** Sends SMS to owner with lead details
 
 ### `POST /webhook/retell/end_call`
 Saves conversation state to Supabase before call ends.
