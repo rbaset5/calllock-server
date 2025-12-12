@@ -511,6 +511,125 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
 });
 
 /**
+ * Lookup existing booking by phone number
+ */
+app.post("/webhook/retell/lookup_booking", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const state = getOrCreateWebhookState(call);
+
+    // Use phone from args, or fall back to caller ID
+    const phone = (args.phone as string) || state.customerPhone;
+
+    if (!phone) {
+      return res.json({
+        found: false,
+        message: "No phone number provided. Please ask the customer for their phone number.",
+      });
+    }
+
+    logger.info({ callId: state.callId, phone: phone.slice(-4) }, "lookup_booking called");
+
+    const result = await lookupBookingByPhone(phone);
+
+    // Store booking UID in state if found (for subsequent cancel/reschedule)
+    if (result.found && result.booking) {
+      state.appointmentId = result.booking.uid;
+    }
+
+    logger.info({ callId: state.callId, found: result.found, latencyMs: Date.now() - startTime }, "lookup_booking completed");
+    return res.json(result);
+  } catch (error) {
+    logger.error({ error }, "lookup_booking failed");
+    return res.status(500).json({ error: "Tool execution failed" });
+  }
+});
+
+/**
+ * Cancel an existing booking
+ */
+app.post("/webhook/retell/cancel_booking", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const state = getOrCreateWebhookState(call);
+
+    // Use booking_uid from args, or from state (set by lookup_booking)
+    const bookingUid = (args.booking_uid as string) || state.appointmentId;
+
+    if (!bookingUid) {
+      return res.json({
+        success: false,
+        message: "No booking found. Please look up the booking first.",
+      });
+    }
+
+    const reason = (args.reason as string) || "Cancelled via phone";
+
+    logger.info({ callId: state.callId, bookingUid }, "cancel_booking called");
+
+    const result = await cancelBooking(bookingUid, reason);
+
+    // Update state
+    if (result.success) {
+      state.appointmentBooked = false;
+      state.appointmentId = undefined;
+    }
+
+    logger.info({ callId: state.callId, success: result.success, latencyMs: Date.now() - startTime }, "cancel_booking completed");
+    return res.json(result);
+  } catch (error) {
+    logger.error({ error }, "cancel_booking failed");
+    return res.status(500).json({ error: "Tool execution failed" });
+  }
+});
+
+/**
+ * Reschedule an existing booking to a new time
+ */
+app.post("/webhook/retell/reschedule_booking", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const state = getOrCreateWebhookState(call);
+
+    // Use booking_uid from args, or from state (set by lookup_booking)
+    const bookingUid = (args.booking_uid as string) || state.appointmentId;
+
+    if (!bookingUid) {
+      return res.json({
+        success: false,
+        message: "No booking found. Please look up the booking first.",
+      });
+    }
+
+    const newDateTime = args.new_date_time as string;
+    if (!newDateTime) {
+      return res.json({
+        success: false,
+        message: "No new date/time provided.",
+      });
+    }
+
+    logger.info({ callId: state.callId, bookingUid, newDateTime }, "reschedule_booking called");
+
+    const result = await rescheduleBooking(bookingUid, newDateTime);
+
+    // Update state
+    if (result.success) {
+      state.appointmentDateTime = newDateTime;
+    }
+
+    logger.info({ callId: state.callId, success: result.success, latencyMs: Date.now() - startTime }, "reschedule_booking completed");
+    return res.json(result);
+  } catch (error) {
+    logger.error({ error }, "reschedule_booking failed");
+    return res.status(500).json({ error: "Tool execution failed" });
+  }
+});
+
+/**
  * Send emergency alert
  */
 app.post("/webhook/retell/send_emergency_alert", async (req: Request, res: Response) => {

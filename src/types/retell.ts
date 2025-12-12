@@ -149,8 +149,8 @@ export type UrgencyTier = "LifeSafety" | "Urgent" | "Routine";
 // Legacy urgency level for calendar availability
 export type UrgencyLevel = "Emergency" | "Urgent" | "Routine" | "Estimate";
 
-// Extended end call reasons to include urgent escalation, waitlist, customer hangup, and sales leads
-export type EndCallReason = "wrong_number" | "callback_later" | "safety_emergency" | "urgent_escalation" | "out_of_area" | "waitlist_added" | "completed" | "customer_hangup" | "sales_lead";
+// Extended end call reasons
+export type EndCallReason = "wrong_number" | "callback_later" | "safety_emergency" | "urgent_escalation" | "out_of_area" | "waitlist_added" | "completed" | "customer_hangup" | "sales_lead" | "cancelled" | "rescheduled";
 
 export interface CalendarSlot {
   date: string;

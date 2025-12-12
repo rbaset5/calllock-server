@@ -142,6 +142,8 @@ function buildAiSummary(
       waitlist_added: "Added to waitlist",
       customer_hangup: "Customer hung up",
       sales_lead: "Sales lead - Replacement inquiry",
+      cancelled: "Appointment cancelled",
+      rescheduled: "Appointment rescheduled",
     };
     parts.push(`Outcome: ${outcomeMap[state.endCallReason] || state.endCallReason}`);
   }

@@ -77,6 +77,15 @@ REPLACEMENT/SALES (customer wants new unit, system 15+ years old, "time to repla
 → "Great, the owner will call you back shortly to discuss your options."
 → Call end_call(reason="sales_lead")
 
+RESCHEDULE OR CANCEL:
+If customer wants to reschedule or cancel an existing appointment:
+→ "I can help with that. Let me look up your appointment."
+→ Call lookup_booking (uses caller ID automatically)
+→ If found: "I found your appointment for [date] at [time]."
+  - For cancel: "Are you sure you want to cancel?" → call cancel_booking → end_call(reason="cancelled")
+  - For reschedule: "When would you like to reschedule?" → check_calendar_availability → offer slots → call reschedule_booking → end_call(reason="rescheduled")
+→ If not found: "I don't see an appointment under this number. Would you like to schedule a new one?"
+
 RULES:
 - NEVER include parenthetical notes or internal reasoning—everything is spoken aloud
 - Keep responses SHORT (1-2 sentences max)
@@ -237,6 +246,21 @@ Gets available appointment slots from Cal.com.
 Books appointment in Cal.com.
 - **Args:** `{ date_time, customer_name?, customer_phone, service_address, problem_description, urgency?, problem_duration?, equipment_type?, ... }`
 - **Returns:** `{ success: boolean, appointmentId?, confirmationMessage }`
+
+### `POST /webhook/retell/lookup_booking`
+Finds existing booking by phone number (uses caller ID if not provided).
+- **Args:** `{ phone?: string }` (optional - defaults to caller ID)
+- **Returns:** `{ found: boolean, booking?: { uid, date, time, status }, message: string }`
+
+### `POST /webhook/retell/cancel_booking`
+Cancels an existing booking.
+- **Args:** `{ booking_uid?: string, reason?: string }` (booking_uid from lookup_booking or previous call)
+- **Returns:** `{ success: boolean, message: string }`
+
+### `POST /webhook/retell/reschedule_booking`
+Reschedules an existing booking to a new time.
+- **Args:** `{ booking_uid?: string, new_date_time: string }` (use isoDateTime from calendar slots)
+- **Returns:** `{ success: boolean, message: string, newDateTime?: string }`
 
 ### `POST /webhook/retell/send_emergency_alert`
 Sends SMS alert for Tier 2 urgent calls via Twilio.
