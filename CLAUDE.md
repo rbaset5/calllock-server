@@ -284,6 +284,90 @@ Post-call webhook (called by Retell after call ends). Syncs data to dashboard.
 - **Body:** Retell post-call payload with transcript, analysis, etc.
 - **Returns:** `{ success: boolean, job_id? }`
 
+## Retell Dashboard Function Setup
+
+When adding new tools, configure them in **Retell Dashboard → Agent → Functions → + Add**.
+
+**Base URL:** `https://calllock-server.onrender.com`
+
+### validate_service_area
+- **URL:** `https://calllock-server.onrender.com/webhook/retell/validate_service_area`
+- **Parameters:**
+  | Name | Type | Required | Description |
+  |------|------|----------|-------------|
+  | zip_code | string | Yes | Customer's ZIP code |
+
+### check_calendar_availability
+- **URL:** `https://calllock-server.onrender.com/webhook/retell/check_calendar_availability`
+- **Parameters:**
+  | Name | Type | Required | Description |
+  |------|------|----------|-------------|
+  | urgency | string | No | "Emergency", "Urgent", "Routine", or "Estimate" |
+  | preferred_date | string | No | Customer's preferred date |
+
+### book_appointment
+- **URL:** `https://calllock-server.onrender.com/webhook/retell/book_appointment`
+- **Parameters:**
+  | Name | Type | Required | Description |
+  |------|------|----------|-------------|
+  | date_time | string | Yes | ISO datetime from calendar slots |
+  | customer_phone | string | Yes | Customer phone number |
+  | service_address | string | Yes | Service address |
+  | problem_description | string | Yes | Description of the issue |
+  | customer_name | string | No | Customer name |
+  | urgency | string | No | Urgency level |
+
+### lookup_booking
+- **URL:** `https://calllock-server.onrender.com/webhook/retell/lookup_booking`
+- **Parameters:**
+  | Name | Type | Required | Description |
+  |------|------|----------|-------------|
+  | phone | string | No | Phone number (defaults to caller ID) |
+
+### cancel_booking
+- **URL:** `https://calllock-server.onrender.com/webhook/retell/cancel_booking`
+- **Parameters:**
+  | Name | Type | Required | Description |
+  |------|------|----------|-------------|
+  | booking_uid | string | No | Booking UID from lookup_booking |
+  | reason | string | No | Cancellation reason |
+
+### reschedule_booking
+- **URL:** `https://calllock-server.onrender.com/webhook/retell/reschedule_booking`
+- **Parameters:**
+  | Name | Type | Required | Description |
+  |------|------|----------|-------------|
+  | booking_uid | string | No | Booking UID from lookup_booking |
+  | new_date_time | string | Yes | New ISO datetime from calendar slots |
+
+### send_emergency_alert
+- **URL:** `https://calllock-server.onrender.com/webhook/retell/send_emergency_alert`
+- **Parameters:**
+  | Name | Type | Required | Description |
+  |------|------|----------|-------------|
+  | urgency_description | string | Yes | What's urgent |
+  | caller_phone | string | Yes | Customer phone |
+  | address | string | Yes | Service address |
+
+### send_sales_lead_alert
+- **URL:** `https://calllock-server.onrender.com/webhook/retell/send_sales_lead_alert`
+- **Parameters:**
+  | Name | Type | Required | Description |
+  |------|------|----------|-------------|
+  | customer_phone | string | Yes | Customer phone |
+  | customer_name | string | No | Customer name |
+  | address | string | No | Service address |
+  | current_equipment | string | No | What equipment (AC, furnace, etc.) |
+  | equipment_age | string | No | How old is the equipment |
+  | notes | string | No | Additional context |
+
+### end_call
+- **URL:** `https://calllock-server.onrender.com/webhook/retell/end_call`
+- **Parameters:**
+  | Name | Type | Required | Description |
+  |------|------|----------|-------------|
+  | reason | string | Yes | One of: completed, wrong_number, callback_later, safety_emergency, urgent_escalation, out_of_area, waitlist_added, customer_hangup, sales_lead, cancelled, rescheduled |
+
 ## Business Rules
 
 - **Diagnostic Fee:** $89 (waived if repair is done)
