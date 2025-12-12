@@ -1,9 +1,14 @@
 /**
- * Revenue Estimation Service
- * Estimates job revenue based on call data to motivate operators to act on leads
+ * Revenue Tier Classification Service
+ *
+ * Classifies jobs into revenue tiers based on high-signal keywords rather than
+ * trying to calculate exact dollar amounts. This approach is more reliable because:
+ * 1. Dispatchers care about Repair vs Replacement, not $450 vs $475
+ * 2. "$$$$ - Replacement" manages expectations better than "$12,400"
+ * 3. Signal priority ensures "20 years old" overrides "weird noise"
  */
 
-import { ConversationState, UrgencyTier, HVACIssueType } from "../types/retell.js";
+import { ConversationState, RevenueTier } from "../types/retell.js";
 import { createModuleLogger } from "../utils/logger.js";
 
 const log = createModuleLogger("revenue-estimation");
@@ -13,148 +18,98 @@ const log = createModuleLogger("revenue-estimation");
 // ============================================
 
 export interface RevenueEstimate {
-  lowEstimate: number;
-  highEstimate: number;
-  midpoint: number;
-  displayRange: string;
+  tier: RevenueTier;
+  tierLabel: string;        // "$$$$", "$$$", "$$", "$", "$$?"
+  tierDescription: string;  // "Potential Replacement", "Major Repair", etc.
+  estimatedRange: string;   // "$5,000-$15,000+"
   confidence: "low" | "medium" | "high";
-  factors: string[];
+  signals: string[];        // What triggered this tier
   potentialReplacement: boolean;
-  serviceCategory: string;
 }
 
-interface PriceRange {
-  low: number;
-  high: number;
-}
-
-interface ServiceCategory {
-  name: string;
-  keywords: string[];
-  priceRange: PriceRange;
+interface TierConfig {
+  tier: RevenueTier;
+  label: string;
+  description: string;
+  range: string;
 }
 
 // ============================================
-// HVAC Service Pricing Matrix (2025 Industry Data)
-// Sources: Angi, HomeGuide, Fixr
+// Tier Configuration
 // ============================================
 
-const SERVICE_CATEGORIES: ServiceCategory[] = [
-  // Specific component repairs (check first - more specific)
-  {
-    name: "Compressor Repair",
-    keywords: ["compressor", "compressor not working", "compressor failed"],
-    priceRange: { low: 600, high: 2500 },
+const TIER_CONFIG: Record<RevenueTier, TierConfig> = {
+  replacement: {
+    tier: "replacement",
+    label: "$$$$",
+    description: "Potential Replacement",
+    range: "$5,000-$15,000+",
   },
-  {
-    name: "Refrigerant Service",
-    keywords: ["refrigerant", "freon", "recharge", "leak", "low refrigerant", "needs freon"],
-    priceRange: { low: 100, high: 1500 },
+  major_repair: {
+    tier: "major_repair",
+    label: "$$$",
+    description: "Major Repair",
+    range: "$800-$3,000",
   },
-  {
-    name: "Motor/Fan Repair",
-    keywords: ["motor", "fan", "blower", "blower motor", "fan motor", "fan not working"],
-    priceRange: { low: 200, high: 700 },
+  standard_repair: {
+    tier: "standard_repair",
+    label: "$$",
+    description: "Standard Repair",
+    range: "$200-$800",
   },
-  {
-    name: "Coil Repair",
-    keywords: ["coil", "evaporator", "condenser coil", "frozen coil", "dirty coil"],
-    priceRange: { low: 200, high: 1500 },
+  minor: {
+    tier: "minor",
+    label: "$",
+    description: "Maintenance/Minor",
+    range: "$75-$250",
   },
-  {
-    name: "Capacitor Repair",
-    keywords: ["capacitor", "run capacitor", "start capacitor"],
-    priceRange: { low: 150, high: 400 },
+  diagnostic: {
+    tier: "diagnostic",
+    label: "$$?",
+    description: "Diagnostic Needed",
+    range: "$99 Diagnostic",
   },
-  {
-    name: "Ignitor Repair",
-    keywords: ["ignitor", "igniter", "pilot", "won't ignite", "no ignition"],
-    priceRange: { low: 150, high: 400 },
-  },
-  {
-    name: "Circuit Board Repair",
-    keywords: ["circuit board", "control board", "motherboard", "board"],
-    priceRange: { low: 100, high: 600 },
-  },
-  {
-    name: "Ductwork Repair",
-    keywords: ["duct", "ductwork", "ducts", "air duct", "vent"],
-    priceRange: { low: 450, high: 2000 },
-  },
-  {
-    name: "Thermostat Service",
-    keywords: ["thermostat", "temperature control", "programmable"],
-    priceRange: { low: 150, high: 350 },
-  },
-  // General issue categories (check after specific components)
-  {
-    name: "AC Repair",
-    keywords: [
-      "not cooling", "won't cool", "warm air", "hot air", "ac not working",
-      "air conditioner", "a/c", "cooling issue", "no cold air", "ac broken",
-      "ac won't turn on", "ac running but not cooling",
-    ],
-    priceRange: { low: 250, high: 700 },
-  },
-  {
-    name: "Furnace Repair",
-    keywords: [
-      "not heating", "no heat", "cold air", "furnace", "heater",
-      "won't heat", "heating issue", "furnace not working", "no warm air",
-      "furnace won't turn on", "furnace broken",
-    ],
-    priceRange: { low: 125, high: 500 },
-  },
-  {
-    name: "Heat Pump Repair",
-    keywords: ["heat pump", "heatpump", "reversing valve"],
-    priceRange: { low: 200, high: 2000 },
-  },
-  {
-    name: "Maintenance",
-    keywords: [
-      "maintenance", "tune-up", "tune up", "check", "inspection",
-      "cleaning", "service", "annual", "preventive", "filter",
-    ],
-    priceRange: { low: 75, high: 200 },
-  },
+};
+
+// ============================================
+// Signal Keywords (ordered by priority)
+// ============================================
+
+// Replacement signals - CHECK FIRST (highest value)
+const REPLACEMENT_REFRIGERANT = ["r-22", "r22", "freon", "old refrigerant"];
+const REPLACEMENT_INTENT = [
+  "new unit", "new system", "replace", "replacement", "upgrade",
+  "quote for new", "time to replace", "need a new", "want a new",
 ];
 
-// Default when no category matches
-const DEFAULT_SERVICE: ServiceCategory = {
-  name: "General Service",
-  keywords: [],
-  priceRange: { low: 200, high: 500 },
-};
+// Major repair signals
+const MAJOR_REPAIR_COMPONENTS = [
+  "compressor", "heat exchanger", "coil", "evaporator coil",
+  "condenser coil", "evaporator", "condenser",
+];
+const MAJOR_REPAIR_SEVERITY = [
+  "completely dead", "won't turn on at all", "totally dead",
+  "smoke", "burning smell", "burning",
+];
 
-// Issue type to service category mapping (fallback when no keywords match)
-const ISSUE_TYPE_DEFAULTS: Record<HVACIssueType, PriceRange> = {
-  Cooling: { low: 250, high: 700 },
-  Heating: { low: 125, high: 500 },
-  Maintenance: { low: 75, high: 200 },
-};
+// Standard repair signals
+const STANDARD_REPAIR_COMPONENTS = [
+  "motor", "fan", "blower", "capacitor", "leak", "leaking",
+  "recharge", "refrigerant", // Note: recharge without R-22 is standard
+];
+const STANDARD_REPAIR_SCOPE = [
+  "ductwork", "duct", "ducts", "adding zone", "zone", "vent",
+];
 
-// Urgency multipliers
-const URGENCY_MULTIPLIERS: Record<UrgencyTier, number> = {
-  LifeSafety: 1.5, // Emergency/after-hours premium
-  Urgent: 1.25,    // Same-day premium
-  Routine: 1.0,    // Standard pricing
-};
-
-// Equipment age thresholds and multipliers
-const AGE_THRESHOLDS = {
-  NEW: 5,           // 0-5 years: no adjustment
-  AGING: 10,        // 6-10 years: slight increase
-  OLD: 15,          // 10-15 years: significant increase, replacement flag
-  VERY_OLD: 20,     // 15+ years: major increase, strong replacement signal
-};
-
-const AGE_MULTIPLIERS = {
-  NEW: 1.0,
-  AGING: 1.25,
-  OLD: 2.5,
-  VERY_OLD: 3.0,
-};
+// Maintenance signals
+const MAINTENANCE_SERVICE = [
+  "tune-up", "tune up", "tuneup", "maintenance", "cleaning",
+  "filter", "check-up", "checkup", "inspection", "annual",
+];
+const MAINTENANCE_SIMPLE = [
+  "thermostat", "weird noise", "running loud", "making noise",
+  "strange sound",
+];
 
 // ============================================
 // Helper Functions
@@ -162,38 +117,27 @@ const AGE_MULTIPLIERS = {
 
 /**
  * Parse equipment age from string like "10 years old" or "about 12 years"
+ * Returns null if age is invalid (negative, > 50, or unparseable)
  */
 function parseEquipmentAge(ageStr?: string): number | null {
   if (!ageStr) return null;
 
+  // Try to match "X years" pattern
   const match = ageStr.match(/(\d+)\s*(?:year|yr|years|yrs)/i);
   if (match) {
-    return parseInt(match[1], 10);
+    const age = parseInt(match[1], 10);
+    // Validate: age should be 0-50 years (reasonable range)
+    if (age >= 0 && age <= 50) {
+      return age;
+    }
   }
 
-  // Try to extract just a number if it's just "10" or similar
-  const numMatch = ageStr.match(/(\d+)/);
+  // Try to extract just a number if it's standalone
+  const numMatch = ageStr.match(/^(\d{1,2})$/);
   if (numMatch) {
-    return parseInt(numMatch[1], 10);
-  }
-
-  return null;
-}
-
-/**
- * Determine service category from problem description keywords
- */
-function categorizeFromDescription(description?: string): ServiceCategory | null {
-  if (!description) return null;
-
-  const lowerDesc = description.toLowerCase();
-
-  // Check each category's keywords
-  for (const category of SERVICE_CATEGORIES) {
-    for (const keyword of category.keywords) {
-      if (lowerDesc.includes(keyword.toLowerCase())) {
-        return category;
-      }
+    const age = parseInt(numMatch[1], 10);
+    if (age >= 0 && age <= 50) {
+      return age;
     }
   }
 
@@ -201,148 +145,208 @@ function categorizeFromDescription(description?: string): ServiceCategory | null
 }
 
 /**
- * Get base price range from issue type (fallback)
+ * Check if text contains any of the keywords (case-insensitive)
  */
-function getPriceRangeFromIssueType(issueType?: HVACIssueType): PriceRange {
-  if (issueType && ISSUE_TYPE_DEFAULTS[issueType]) {
-    return ISSUE_TYPE_DEFAULTS[issueType];
+function containsAny(text: string, keywords: string[]): string | null {
+  const lowerText = text.toLowerCase();
+  for (const keyword of keywords) {
+    if (lowerText.includes(keyword.toLowerCase())) {
+      return keyword;
+    }
   }
-  return DEFAULT_SERVICE.priceRange;
+  return null;
 }
 
 /**
- * Calculate confidence level based on available data
+ * Calculate confidence based on available data
  */
-function calculateConfidence(state: ConversationState): "low" | "medium" | "high" {
-  let score = 0;
+function calculateConfidence(state: ConversationState, signalCount: number): "low" | "medium" | "high" {
+  // High confidence: multiple signals or very clear indicators
+  if (signalCount >= 2) return "high";
 
-  if (state.problemDescription) score++;
-  if (state.hvacIssueType) score++;
-  if (state.equipmentType) score++;
-  if (state.urgencyTier) score++;
-  if (state.equipmentAge) score++;
+  // Medium confidence: at least one signal plus some context
+  if (signalCount >= 1) {
+    if (state.problemDescription || state.equipmentAge || state.equipmentType) {
+      return "medium";
+    }
+  }
 
-  if (score >= 4) return "high";
-  if (score >= 2) return "medium";
   return "low";
 }
 
 /**
- * Format price range as display string
+ * Build the result object
  */
-function formatPriceRange(low: number, high: number): string {
-  return `$${low.toLocaleString()}-$${high.toLocaleString()}`;
+function buildResult(
+  tier: RevenueTier,
+  signals: string[],
+  confidence: "low" | "medium" | "high"
+): RevenueEstimate {
+  const config = TIER_CONFIG[tier];
+  return {
+    tier: config.tier,
+    tierLabel: config.label,
+    tierDescription: config.description,
+    estimatedRange: config.range,
+    confidence,
+    signals,
+    potentialReplacement: tier === "replacement",
+  };
 }
 
 // ============================================
-// Main Estimation Function
+// Main Classification Function
 // ============================================
 
 /**
- * Estimate revenue for a job based on conversation state
+ * Classify job into revenue tier based on conversation signals
+ *
+ * Priority cascade:
+ * 1. Replacement signals (R-22, age 15+, replacement intent)
+ * 2. Special case: recharge + R-22 → replacement
+ * 3. Major repair signals (compressor, heat exchanger)
+ * 4. Standard repair signals (motor, capacitor, ductwork)
+ * 5. Maintenance signals (tune-up, filter)
+ * 6. Fallback to diagnostic if unclear
  */
 export function estimateRevenue(state: ConversationState): RevenueEstimate {
-  const factors: string[] = [];
+  const signals: string[] = [];
 
-  // Step 1: Determine service category from problem description
-  let category = categorizeFromDescription(state.problemDescription);
-  let baseRange: PriceRange;
+  // Combine all text sources for keyword matching
+  const allText = [
+    state.problemDescription || "",
+    state.equipmentType || "",
+    state.salesLeadNotes || "",
+  ].join(" ").toLowerCase();
 
-  if (category) {
-    baseRange = { ...category.priceRange };
-    factors.push(category.name);
-  } else {
-    // Fallback to issue type
-    baseRange = getPriceRangeFromIssueType(state.hvacIssueType);
-    category = {
-      name: state.hvacIssueType
-        ? `${state.hvacIssueType} Service`
-        : DEFAULT_SERVICE.name,
-      keywords: [],
-      priceRange: baseRange,
-    };
-    factors.push(category.name);
-  }
-
-  // Step 2: Apply urgency multiplier
-  const urgencyTier = state.urgencyTier || "Routine";
-  const urgencyMult = URGENCY_MULTIPLIERS[urgencyTier];
-
-  if (urgencyMult > 1) {
-    factors.push(`${urgencyTier} priority (+${Math.round((urgencyMult - 1) * 100)}%)`);
-  }
-
-  // Step 3: Check equipment age
+  // Parse equipment age
   const equipmentAge = parseEquipmentAge(state.equipmentAge);
-  let ageMult = 1.0;
-  let potentialReplacement = false;
 
-  if (equipmentAge !== null) {
-    if (equipmentAge >= AGE_THRESHOLDS.VERY_OLD) {
-      ageMult = AGE_MULTIPLIERS.VERY_OLD;
-      potentialReplacement = true;
-      factors.push(`Equipment ${equipmentAge}+ years (potential replacement)`);
-    } else if (equipmentAge >= AGE_THRESHOLDS.OLD) {
-      ageMult = AGE_MULTIPLIERS.OLD;
-      potentialReplacement = true;
-      factors.push(`Equipment ${equipmentAge} years (aging system)`);
-    } else if (equipmentAge >= AGE_THRESHOLDS.AGING) {
-      ageMult = AGE_MULTIPLIERS.AGING;
-      factors.push(`Equipment ${equipmentAge} years`);
-    }
+  // ==========================================
+  // TIER 1: REPLACEMENT ($$$$) - Check first
+  // ==========================================
+
+  // Check for R-22/Freon (obsolete refrigerant = replacement)
+  const refrigerantSignal = containsAny(allText, REPLACEMENT_REFRIGERANT);
+  if (refrigerantSignal) {
+    signals.push(`R-22/Freon system`);
   }
 
-  // Step 4: Add equipment type context if available
-  if (state.equipmentType) {
-    factors.push(state.equipmentType);
+  // Check for old system (15+ years)
+  if (equipmentAge !== null && equipmentAge >= 15) {
+    signals.push(`${equipmentAge}+ years old`);
   }
 
-  // Step 5: Calculate final price range
-  // Urgency affects both low and high
-  // Age only affects the upper bound (potential for bigger job)
-  const lowEstimate = Math.round(baseRange.low * urgencyMult);
-  const highEstimate = Math.round(baseRange.high * urgencyMult * ageMult);
+  // Check for replacement intent keywords
+  const intentSignal = containsAny(allText, REPLACEMENT_INTENT);
+  if (intentSignal) {
+    signals.push(`Replacement inquiry`);
+  }
 
-  // Midpoint for dashboard display (weighted slightly toward lower end for conservatism)
-  const midpoint = Math.round((lowEstimate + highEstimate) / 2);
+  // CRITICAL: If "recharge" mentioned WITH R-22, it's replacement
+  const hasRecharge = containsAny(allText, ["recharge", "freon fill", "refrigerant"]);
+  if (hasRecharge && refrigerantSignal) {
+    signals.push(`R-22 recharge (obsolete)`);
+  }
 
-  // Step 6: Calculate confidence
-  const confidence = calculateConfidence(state);
+  // If we have ANY replacement signal, classify as replacement
+  if (refrigerantSignal || (equipmentAge !== null && equipmentAge >= 15) || intentSignal) {
+    const confidence = calculateConfidence(state, signals.length);
+    log.debug({ callId: state.callId, tier: "replacement", signals }, "Classified as replacement");
+    return buildResult("replacement", signals, confidence);
+  }
 
-  const estimate: RevenueEstimate = {
-    lowEstimate,
-    highEstimate,
-    midpoint,
-    displayRange: formatPriceRange(lowEstimate, highEstimate),
-    confidence,
-    factors,
-    potentialReplacement,
-    serviceCategory: category.name,
-  };
+  // ==========================================
+  // TIER 2: MAJOR REPAIR ($$$)
+  // ==========================================
 
-  log.debug(
-    {
-      callId: state.callId,
-      problemDescription: state.problemDescription?.substring(0, 50),
-      issueType: state.hvacIssueType,
-      equipmentAge: state.equipmentAge,
-      urgencyTier: state.urgencyTier,
-      estimate: {
-        range: estimate.displayRange,
-        midpoint: estimate.midpoint,
-        confidence: estimate.confidence,
-        category: estimate.serviceCategory,
-      },
-    },
-    "Revenue estimate calculated"
-  );
+  const majorComponent = containsAny(allText, MAJOR_REPAIR_COMPONENTS);
+  if (majorComponent) {
+    signals.push(`Major component: ${majorComponent}`);
+  }
 
-  return estimate;
+  const severitySignal = containsAny(allText, MAJOR_REPAIR_SEVERITY);
+  if (severitySignal) {
+    signals.push(`Severity: ${severitySignal}`);
+  }
+
+  if (majorComponent || severitySignal) {
+    const confidence = calculateConfidence(state, signals.length);
+    log.debug({ callId: state.callId, tier: "major_repair", signals }, "Classified as major repair");
+    return buildResult("major_repair", signals, confidence);
+  }
+
+  // ==========================================
+  // TIER 3: STANDARD REPAIR ($$)
+  // ==========================================
+
+  const standardComponent = containsAny(allText, STANDARD_REPAIR_COMPONENTS);
+  if (standardComponent) {
+    signals.push(`Component: ${standardComponent}`);
+  }
+
+  const scopeSignal = containsAny(allText, STANDARD_REPAIR_SCOPE);
+  if (scopeSignal) {
+    signals.push(`Scope: ${scopeSignal}`);
+  }
+
+  if (standardComponent || scopeSignal) {
+    const confidence = calculateConfidence(state, signals.length);
+    log.debug({ callId: state.callId, tier: "standard_repair", signals }, "Classified as standard repair");
+    return buildResult("standard_repair", signals, confidence);
+  }
+
+  // ==========================================
+  // TIER 4: MAINTENANCE ($)
+  // ==========================================
+
+  const maintenanceSignal = containsAny(allText, MAINTENANCE_SERVICE);
+  if (maintenanceSignal) {
+    signals.push(`Service: ${maintenanceSignal}`);
+  }
+
+  const simpleSignal = containsAny(allText, MAINTENANCE_SIMPLE);
+  if (simpleSignal) {
+    signals.push(`Issue: ${simpleSignal}`);
+  }
+
+  if (maintenanceSignal || simpleSignal) {
+    const confidence = calculateConfidence(state, signals.length);
+    log.debug({ callId: state.callId, tier: "minor", signals }, "Classified as maintenance");
+    return buildResult("minor", signals, confidence);
+  }
+
+  // ==========================================
+  // FALLBACK: DIAGNOSTIC ($$?)
+  // ==========================================
+
+  // If no signals detected, classify as diagnostic
+  // Don't default to minor ($) - could deprioritize a major job
+  signals.push("Unclear scope");
+  log.debug({ callId: state.callId, tier: "diagnostic", signals }, "Classified as diagnostic (no signals)");
+  return buildResult("diagnostic", signals, "low");
 }
 
 /**
- * Get a simple estimate value (midpoint) for cases where full estimate isn't needed
+ * Get a simple estimate value for backwards compatibility
+ * Returns midpoint of the tier's range
  */
 export function getEstimatedValue(state: ConversationState): number {
-  return estimateRevenue(state).midpoint;
+  const estimate = estimateRevenue(state);
+
+  // Return midpoint values for each tier
+  switch (estimate.tier) {
+    case "replacement":
+      return 10000;
+    case "major_repair":
+      return 1900;
+    case "standard_repair":
+      return 500;
+    case "minor":
+      return 150;
+    case "diagnostic":
+      return 99;
+    default:
+      return 300;
+  }
 }

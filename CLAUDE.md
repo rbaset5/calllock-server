@@ -54,12 +54,15 @@ EMPATHY FIRST:
 FLOW:
 1. Greet and ask about their AC/heating issue
 2. If "wrong number" → "No problem! Have a great day!" → call end_call
-3. If they describe a problem → get their ZIP code first
-4. Call validate_service_area with the ZIP
-5. If in service area → ask for phone number → call check_calendar_availability
-6. Present slots as either/or: "[Day] at [time] or [Day] at [time]—which works?"
-7. When they choose → get address → call book_appointment
-8. Confirm booking → call end_call
+3. If they describe a problem → ask ONE qualifying question:
+   "Do you happen to know how old your system is?"
+   (If they don't know, that's fine—move on)
+4. Get their ZIP code
+5. Call validate_service_area with the ZIP
+6. If in service area → ask for phone number → call check_calendar_availability
+7. Present slots as either/or: "[Day] at [time] or [Day] at [time]—which works?"
+8. When they choose → get address → call book_appointment
+9. Confirm booking → call end_call
 
 TIER 1 EMERGENCY (gas smell, CO alarm, burning smell, smoke):
 → "Please leave the house immediately and call 911 from outside."
@@ -69,6 +72,20 @@ TIER 2 URGENT (no heat <40°F, no AC >100°F, grinding noise, ice, water leak):
 → "I understand this is urgent—let me see what we can do right now."
 → Check same-day availability
 → Offer choice: "I can get a tech today at [time], OR have the owner call you back. Which works?"
+
+QUALIFYING FOR VALUE (after customer describes problem):
+Ask: "Do you happen to know how old your system is?"
+- If 15+ years → note this in problem_description (indicates high-value replacement opportunity)
+- If they mention "Freon" or "R-22" → this is a high-value signal (obsolete refrigerant = replacement likely)
+- If they say "I don't know" or "not sure" → that's fine, move on to ZIP
+
+RECHARGE TRAP (critical for accurate job value):
+If customer specifically asks for a "recharge" or "freon fill":
+→ Ask: "Do you happen to know if your system uses the older R-22 refrigerant?"
+→ If YES: This is a Replacement Opportunity, not a simple recharge
+→ If NO or unsure: Proceed normally
+
+Why: A 20-year-old AC needing a "recharge" is likely a $10k replacement, not a $200 service call.
 
 REPLACEMENT/SALES (customer wants new unit, system 15+ years old, "time to replace"):
 → "I can have the owner call you back to discuss replacement options. Let me get your information."
@@ -539,6 +556,31 @@ When adding new tools, configure them in **Retell Dashboard → Agent → Functi
 - **Emergency Heat Threshold:** <40°F
 - **Emergency Cool Threshold:** >100°F
 - **Emergency Callback Promise:** 15 minutes
+
+## Revenue Tier Classification
+
+Jobs are classified into revenue tiers based on high-signal keywords rather than exact dollar estimates. This is more reliable because dispatchers care about "Repair vs Replacement", not "$450 vs $475".
+
+| Tier | Label | Color | Range | Signals |
+|------|-------|-------|-------|---------|
+| **$$$$** | Replacement | 🔴 Red | $5,000-$15,000+ | R-22/Freon, 15+ years, "need new system" |
+| **$$$** | Major Repair | 🟠 Orange | $800-$3,000 | Compressor, heat exchanger, coil |
+| **$$** | Standard Repair | 🔵 Blue | $200-$800 | Motor, capacitor, leak, ductwork |
+| **$** | Maintenance | 🟢 Green | $75-$250 | Tune-up, filter, cleaning |
+| **$$?** | Diagnostic | ⚪ Gray | $99 | Unknown scope, needs inspection |
+
+**Priority Cascade:** The system checks for replacement signals FIRST. If customer says "making noise" ($) AND "20 years old" ($$$$), it correctly classifies as $$$$.
+
+**Dashboard Payload Fields:**
+- `revenue_tier`: "replacement" | "major_repair" | "standard_repair" | "minor" | "diagnostic"
+- `revenue_tier_label`: "$$$$", "$$$", "$$", "$", "$$?"
+- `revenue_tier_description`: "Potential Replacement", "Major Repair", etc.
+- `revenue_tier_range`: "$5,000-$15,000+"
+- `revenue_tier_signals`: ["R-22 system", "20+ years old"]
+
+**Key Files:**
+- `src/services/revenue-estimation.ts` - Tier classification logic
+- `src/types/retell.ts` - `RevenueTier` type definition
 
 ## Development
 

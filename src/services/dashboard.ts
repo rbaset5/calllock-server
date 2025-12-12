@@ -3,7 +3,7 @@
  * Sends call data to the CallLock Dashboard webhook
  */
 
-import { ConversationState, UrgencyTier, EndCallReason, RetellPostCallData } from "../types/retell.js";
+import { ConversationState, UrgencyTier, EndCallReason, RetellPostCallData, RevenueTier } from "../types/retell.js";
 import { createModuleLogger, maskPhone } from "../utils/logger.js";
 import { fetchWithRetry, FetchError } from "../utils/fetch.js";
 import { estimateRevenue, RevenueEstimate } from "./revenue-estimation.js";
@@ -36,14 +36,16 @@ export interface DashboardJobPayload {
   scheduled_at?: string;
   call_transcript?: string;
   user_email: string;
-  // Revenue estimation fields
-  estimated_value?: number;
-  estimated_revenue_low?: number;
-  estimated_revenue_high?: number;
-  estimated_revenue_display?: string;
+  // Revenue tier classification (replaces granular dollar estimates)
+  revenue_tier?: RevenueTier;
+  revenue_tier_label?: string;        // "$$$$", "$$$", "$$", "$", "$$?"
+  revenue_tier_description?: string;  // "Potential Replacement", "Major Repair", etc.
+  revenue_tier_range?: string;        // "$5,000-$15,000+"
+  revenue_tier_signals?: string[];    // ["R-22 system", "20+ years old"]
   revenue_confidence?: "low" | "medium" | "high";
-  revenue_factors?: string[];
   potential_replacement?: boolean;
+  // Legacy field for backwards compatibility
+  estimated_value?: number;
   // Call outcome for Lead creation
   end_call_reason?: EndCallReason;
   // Problem details for Lead
@@ -164,6 +166,26 @@ function buildAiSummary(
 }
 
 /**
+ * Get midpoint dollar value for a tier (for backwards compatibility)
+ */
+function getMidpointValue(tier: RevenueTier): number {
+  switch (tier) {
+    case "replacement":
+      return 10000;
+    case "major_repair":
+      return 1900;
+    case "standard_repair":
+      return 500;
+    case "minor":
+      return 150;
+    case "diagnostic":
+      return 99;
+    default:
+      return 300;
+  }
+}
+
+/**
  * Build a title-friendly description for sales leads
  * Format: "AC Replacement - 20 years old" or "HVAC Replacement"
  */
@@ -190,6 +212,9 @@ export function transformToDashboardPayload(
     ? buildSalesLeadTitle(state.equipmentType, state.equipmentAge)
     : state.problemDescription;
 
+  // Get midpoint value for backwards compatibility
+  const estimatedValue = getMidpointValue(estimate.tier);
+
   return {
     customer_name: state.customerName || state.customerPhone || "Unknown Caller",
     customer_phone: state.customerPhone || "Unknown",
@@ -200,14 +225,16 @@ export function transformToDashboardPayload(
     scheduled_at: state.appointmentDateTime,
     call_transcript: retellData?.transcript,
     user_email: DASHBOARD_USER_EMAIL!,
-    // Revenue estimation
-    estimated_value: estimate.midpoint,
-    estimated_revenue_low: estimate.lowEstimate,
-    estimated_revenue_high: estimate.highEstimate,
-    estimated_revenue_display: estimate.displayRange,
+    // Revenue tier classification
+    revenue_tier: estimate.tier,
+    revenue_tier_label: estimate.tierLabel,
+    revenue_tier_description: estimate.tierDescription,
+    revenue_tier_range: estimate.estimatedRange,
+    revenue_tier_signals: estimate.signals,
     revenue_confidence: estimate.confidence,
-    revenue_factors: estimate.factors,
     potential_replacement: estimate.potentialReplacement,
+    // Legacy field for backwards compatibility
+    estimated_value: estimatedValue,
     // Call outcome for Lead creation (when no booking)
     end_call_reason: state.endCallReason,
     issue_description: issueDescription,

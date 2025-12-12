@@ -149,6 +149,9 @@ export type UrgencyTier = "LifeSafety" | "Urgent" | "Routine";
 // Legacy urgency level for calendar availability
 export type UrgencyLevel = "Emergency" | "Urgent" | "Routine" | "Estimate";
 
+// Revenue tier classification (replaces granular dollar estimates)
+export type RevenueTier = "replacement" | "major_repair" | "standard_repair" | "minor" | "diagnostic";
+
 // Extended end call reasons
 export type EndCallReason = "wrong_number" | "callback_later" | "safety_emergency" | "urgent_escalation" | "out_of_area" | "waitlist_added" | "completed" | "customer_hangup" | "sales_lead" | "cancelled" | "rescheduled";
 
