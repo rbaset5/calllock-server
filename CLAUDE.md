@@ -14,9 +14,17 @@ This is the webhook server for CallLock's HVAC voice AI system. It provides tool
 Customer Call → Retell (voice + LLM) → Webhook Tools → Supabase → Dashboard
 ```
 
-## Retell LLM Prompt (Reference)
+## Retell LLM Prompt (CRITICAL - Keep Updated)
 
-The AI's behavior is defined in Retell Dashboard. Copy below for reference:
+**IMPORTANT:** This is the production system prompt that gets copied to Retell Dashboard. When adding new features, tools, or changing conversation flows, YOU MUST UPDATE THIS PROMPT. The user cannot update Retell Dashboard without the exact text from here.
+
+**When to update this prompt:**
+- Adding a new tool/webhook endpoint
+- Changing conversation flow logic
+- Adding new call handling scenarios (like sales leads, new tiers)
+- Modifying business rules the AI needs to follow
+
+**The prompt below is the source of truth:**
 
 ```
 You are a friendly AI assistant for A & R Heating & Cooling, an HVAC service company in Austin, TX area.
