@@ -1,5 +1,18 @@
 # CallLock HVAC - Retell Webhook Server
 
+## What is CallLock?
+
+**CallLock is a multi-tenant platform** that provides AI-powered phone answering for HVAC businesses. Each HVAC business gets their own:
+- Retell agent (with business-specific prompt variables)
+- Knowledge base (FAQ document with their hours, services, etc.)
+- Dashboard view (their calls, jobs, analytics)
+
+**Key multi-tenant considerations:**
+- Business-specific info (name, hours, service area) comes from Retell variables or knowledge base
+- Never hardcode business-specific values in the server code
+- The webhook server is shared - it handles calls for ALL businesses
+- Business identification comes from Retell call metadata
+
 ## Overview
 
 This is the webhook server for CallLock's HVAC voice AI system. It provides tool endpoints that Retell LLM calls during conversations.
