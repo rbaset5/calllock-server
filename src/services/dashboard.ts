@@ -48,6 +48,10 @@ export interface DashboardJobPayload {
   end_call_reason?: EndCallReason;
   // Problem details for Lead
   issue_description?: string;
+  // Sales lead specific fields
+  equipment_type?: string;
+  equipment_age?: string;
+  sales_lead_notes?: string;
 }
 
 /**
@@ -160,6 +164,18 @@ function buildAiSummary(
 }
 
 /**
+ * Build a title-friendly description for sales leads
+ * Format: "AC Replacement - 20 years old" or "HVAC Replacement"
+ */
+function buildSalesLeadTitle(equipmentType?: string, equipmentAge?: string): string {
+  const equipment = equipmentType || "HVAC";
+  if (equipmentAge) {
+    return `${equipment} Replacement - ${equipmentAge}`;
+  }
+  return `${equipment} Replacement`;
+}
+
+/**
  * Transform conversation state to dashboard payload
  */
 export function transformToDashboardPayload(
@@ -168,6 +184,11 @@ export function transformToDashboardPayload(
 ): DashboardJobPayload {
   // Calculate revenue estimate
   const estimate = estimateRevenue(state);
+
+  // For sales leads, create a descriptive title from equipment info
+  const issueDescription = state.endCallReason === "sales_lead"
+    ? buildSalesLeadTitle(state.equipmentType, state.equipmentAge)
+    : state.problemDescription;
 
   return {
     customer_name: state.customerName || state.customerPhone || "Unknown Caller",
@@ -189,7 +210,11 @@ export function transformToDashboardPayload(
     potential_replacement: estimate.potentialReplacement,
     // Call outcome for Lead creation (when no booking)
     end_call_reason: state.endCallReason,
-    issue_description: state.problemDescription,
+    issue_description: issueDescription,
+    // Sales lead specific fields
+    equipment_type: state.equipmentType,
+    equipment_age: state.equipmentAge,
+    sales_lead_notes: state.salesLeadNotes,
   };
 }
 

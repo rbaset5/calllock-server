@@ -270,6 +270,8 @@ export interface ConversationState {
   equipmentBrand?: string;           // "Carrier", "Trane", "Lennox"
   equipmentLocation?: string;        // "attic", "backyard", "basement", "garage"
   equipmentAge?: string;             // "10 years old", "new last year"
+  // Sales lead specific
+  salesLeadNotes?: string;           // Additional context from sales inquiry
   appointmentBooked: boolean;
   appointmentId?: string;
   appointmentDateTime?: string;

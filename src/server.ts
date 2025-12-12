@@ -693,6 +693,7 @@ app.post("/webhook/retell/send_sales_lead_alert", async (req: Request, res: Resp
     state.serviceAddress = args.address as string | undefined;
     state.equipmentType = args.current_equipment as string | undefined;
     state.equipmentAge = args.equipment_age as string | undefined;
+    state.salesLeadNotes = args.notes as string | undefined;
 
     logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "send_sales_lead_alert completed");
     return res.json(result);
