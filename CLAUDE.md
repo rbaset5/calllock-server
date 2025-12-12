@@ -290,83 +290,246 @@ When adding new tools, configure them in **Retell Dashboard → Agent → Functi
 
 **Base URL:** `https://calllock-server.onrender.com`
 
+---
+
 ### validate_service_area
-- **URL:** `https://calllock-server.onrender.com/webhook/retell/validate_service_area`
-- **Parameters:**
-  | Name | Type | Required | Description |
-  |------|------|----------|-------------|
-  | zip_code | string | Yes | Customer's ZIP code |
+- **Name:** `validate_service_area`
+- **Description:** Check if customer's ZIP code is in our service area
+- **API Endpoint:** `POST` `https://calllock-server.onrender.com/webhook/retell/validate_service_area`
+- **Parameters (JSON Schema):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "zip_code": {
+      "type": "string",
+      "description": "Customer's ZIP code"
+    }
+  },
+  "required": ["zip_code"]
+}
+```
+
+---
 
 ### check_calendar_availability
-- **URL:** `https://calllock-server.onrender.com/webhook/retell/check_calendar_availability`
-- **Parameters:**
-  | Name | Type | Required | Description |
-  |------|------|----------|-------------|
-  | urgency | string | No | "Emergency", "Urgent", "Routine", or "Estimate" |
-  | preferred_date | string | No | Customer's preferred date |
+- **Name:** `check_calendar_availability`
+- **Description:** Get available appointment slots from the calendar
+- **API Endpoint:** `POST` `https://calllock-server.onrender.com/webhook/retell/check_calendar_availability`
+- **Parameters (JSON Schema):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "urgency": {
+      "type": "string",
+      "description": "Urgency level: Emergency, Urgent, Routine, or Estimate"
+    },
+    "preferred_date": {
+      "type": "string",
+      "description": "Customer's preferred date"
+    }
+  },
+  "required": []
+}
+```
+
+---
 
 ### book_appointment
-- **URL:** `https://calllock-server.onrender.com/webhook/retell/book_appointment`
-- **Parameters:**
-  | Name | Type | Required | Description |
-  |------|------|----------|-------------|
-  | date_time | string | Yes | ISO datetime from calendar slots |
-  | customer_phone | string | Yes | Customer phone number |
-  | service_address | string | Yes | Service address |
-  | problem_description | string | Yes | Description of the issue |
-  | customer_name | string | No | Customer name |
-  | urgency | string | No | Urgency level |
+- **Name:** `book_appointment`
+- **Description:** Book an appointment for the customer
+- **API Endpoint:** `POST` `https://calllock-server.onrender.com/webhook/retell/book_appointment`
+- **Parameters (JSON Schema):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "date_time": {
+      "type": "string",
+      "description": "ISO datetime from calendar slots (use exact isoDateTime value)"
+    },
+    "customer_phone": {
+      "type": "string",
+      "description": "Customer phone number"
+    },
+    "service_address": {
+      "type": "string",
+      "description": "Service address"
+    },
+    "problem_description": {
+      "type": "string",
+      "description": "Description of the HVAC issue"
+    },
+    "customer_name": {
+      "type": "string",
+      "description": "Customer name"
+    },
+    "urgency": {
+      "type": "string",
+      "description": "Urgency level"
+    }
+  },
+  "required": ["date_time", "customer_phone", "service_address", "problem_description"]
+}
+```
+
+---
 
 ### lookup_booking
-- **URL:** `https://calllock-server.onrender.com/webhook/retell/lookup_booking`
-- **Parameters:**
-  | Name | Type | Required | Description |
-  |------|------|----------|-------------|
-  | phone | string | No | Phone number (defaults to caller ID) |
+- **Name:** `lookup_booking`
+- **Description:** Find an existing booking by phone number (uses caller ID if not provided)
+- **API Endpoint:** `POST` `https://calllock-server.onrender.com/webhook/retell/lookup_booking`
+- **Parameters (JSON Schema):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "phone": {
+      "type": "string",
+      "description": "Phone number to look up (defaults to caller ID)"
+    }
+  },
+  "required": []
+}
+```
+
+---
 
 ### cancel_booking
-- **URL:** `https://calllock-server.onrender.com/webhook/retell/cancel_booking`
-- **Parameters:**
-  | Name | Type | Required | Description |
-  |------|------|----------|-------------|
-  | booking_uid | string | No | Booking UID from lookup_booking |
-  | reason | string | No | Cancellation reason |
+- **Name:** `cancel_booking`
+- **Description:** Cancel an existing booking
+- **API Endpoint:** `POST` `https://calllock-server.onrender.com/webhook/retell/cancel_booking`
+- **Parameters (JSON Schema):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "booking_uid": {
+      "type": "string",
+      "description": "Booking UID from lookup_booking result"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Reason for cancellation"
+    }
+  },
+  "required": []
+}
+```
+
+---
 
 ### reschedule_booking
-- **URL:** `https://calllock-server.onrender.com/webhook/retell/reschedule_booking`
-- **Parameters:**
-  | Name | Type | Required | Description |
-  |------|------|----------|-------------|
-  | booking_uid | string | No | Booking UID from lookup_booking |
-  | new_date_time | string | Yes | New ISO datetime from calendar slots |
+- **Name:** `reschedule_booking`
+- **Description:** Reschedule an existing booking to a new time
+- **API Endpoint:** `POST` `https://calllock-server.onrender.com/webhook/retell/reschedule_booking`
+- **Parameters (JSON Schema):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "booking_uid": {
+      "type": "string",
+      "description": "Booking UID from lookup_booking result"
+    },
+    "new_date_time": {
+      "type": "string",
+      "description": "New ISO datetime from calendar slots"
+    }
+  },
+  "required": ["new_date_time"]
+}
+```
+
+---
 
 ### send_emergency_alert
-- **URL:** `https://calllock-server.onrender.com/webhook/retell/send_emergency_alert`
-- **Parameters:**
-  | Name | Type | Required | Description |
-  |------|------|----------|-------------|
-  | urgency_description | string | Yes | What's urgent |
-  | caller_phone | string | Yes | Customer phone |
-  | address | string | Yes | Service address |
+- **Name:** `send_emergency_alert`
+- **Description:** Send SMS alert to dispatcher for Tier 2 urgent situations
+- **API Endpoint:** `POST` `https://calllock-server.onrender.com/webhook/retell/send_emergency_alert`
+- **Parameters (JSON Schema):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "urgency_description": {
+      "type": "string",
+      "description": "What makes this urgent (e.g., 'No heat, elderly in home')"
+    },
+    "caller_phone": {
+      "type": "string",
+      "description": "Customer phone number"
+    },
+    "address": {
+      "type": "string",
+      "description": "Service address"
+    }
+  },
+  "required": ["urgency_description", "caller_phone", "address"]
+}
+```
+
+---
 
 ### send_sales_lead_alert
-- **URL:** `https://calllock-server.onrender.com/webhook/retell/send_sales_lead_alert`
-- **Parameters:**
-  | Name | Type | Required | Description |
-  |------|------|----------|-------------|
-  | customer_phone | string | Yes | Customer phone |
-  | customer_name | string | No | Customer name |
-  | address | string | No | Service address |
-  | current_equipment | string | No | What equipment (AC, furnace, etc.) |
-  | equipment_age | string | No | How old is the equipment |
-  | notes | string | No | Additional context |
+- **Name:** `send_sales_lead_alert`
+- **Description:** Send SMS alert for replacement/sales inquiries
+- **API Endpoint:** `POST` `https://calllock-server.onrender.com/webhook/retell/send_sales_lead_alert`
+- **Parameters (JSON Schema):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "customer_phone": {
+      "type": "string",
+      "description": "Customer phone number"
+    },
+    "customer_name": {
+      "type": "string",
+      "description": "Customer name"
+    },
+    "address": {
+      "type": "string",
+      "description": "Service address"
+    },
+    "current_equipment": {
+      "type": "string",
+      "description": "What equipment they want to replace (AC, furnace, etc.)"
+    },
+    "equipment_age": {
+      "type": "string",
+      "description": "How old is the equipment"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Additional context from the call"
+    }
+  },
+  "required": ["customer_phone"]
+}
+```
+
+---
 
 ### end_call
-- **URL:** `https://calllock-server.onrender.com/webhook/retell/end_call`
-- **Parameters:**
-  | Name | Type | Required | Description |
-  |------|------|----------|-------------|
-  | reason | string | Yes | One of: completed, wrong_number, callback_later, safety_emergency, urgent_escalation, out_of_area, waitlist_added, customer_hangup, sales_lead, cancelled, rescheduled |
+- **Name:** `end_call`
+- **Description:** End the call and save conversation data
+- **API Endpoint:** `POST` `https://calllock-server.onrender.com/webhook/retell/end_call`
+- **Parameters (JSON Schema):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "reason": {
+      "type": "string",
+      "description": "Call outcome reason",
+      "enum": ["completed", "wrong_number", "callback_later", "safety_emergency", "urgent_escalation", "out_of_area", "waitlist_added", "customer_hangup", "sales_lead", "cancelled", "rescheduled"]
+    }
+  },
+  "required": ["reason"]
+}
+```
 
 ## Business Rules
 
