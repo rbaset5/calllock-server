@@ -16,7 +16,7 @@ import {
   rescheduleBooking,
 } from "./services/calcom.js";
 import { saveCallSession, getCallSession, updateCallSessionSynced } from "./services/supabase.js";
-import { sendJobToDashboard, isDashboardEnabled } from "./services/dashboard.js";
+import { sendJobToDashboard, isDashboardEnabled, sendCallToDashboard, sendEmergencyAlertToDashboard } from "./services/dashboard.js";
 import {
   checkCalendarAvailability,
   bookAppointment,
@@ -28,7 +28,7 @@ import { getCustomerHistory } from "./services/customer-history.js";
 // Infrastructure imports
 import { logger, maskPhone } from "./utils/logger.js";
 import { runHealthChecks } from "./utils/health.js";
-import { apiKeyAuth } from "./middleware/auth.js";
+import { apiKeyAuth, retellWebhookAuth } from "./middleware/auth.js";
 import {
   validate,
   lookupRequestSchema,
@@ -42,8 +42,16 @@ import {
 // ===========================================
 
 function validateEnvironment(): void {
+  // Enforce required security variables
+  const required = ["API_SECRET_KEY", "RETELL_API_KEY"];
+  const missingRequired = required.filter((key) => !process.env[key]);
+  if (missingRequired.length > 0) {
+    logger.fatal({ missing: missingRequired }, "Missing required security environment variables. Shutting down.");
+    process.exit(1);
+  }
+
   // Warn about optional but recommended variables
-  const recommended = ["RETELL_API_KEY", "BUSINESS_NAME", "SERVICE_AREA"];
+  const recommended = ["BUSINESS_NAME", "SERVICE_AREA"];
   const missingRecommended = recommended.filter((key) => !process.env[key]);
   if (missingRecommended.length > 0) {
     logger.warn({ missing: missingRecommended }, "Missing recommended environment variables");
@@ -52,11 +60,6 @@ function validateEnvironment(): void {
   // Warn if emergency escalation is not configured
   if (!process.env.ON_CALL_PHONE_NUMBER && !process.env.EMERGENCY_SMS_NUMBER) {
     logger.warn("No emergency escalation configured (ON_CALL_PHONE_NUMBER or EMERGENCY_SMS_NUMBER)");
-  }
-
-  // Warn if API_SECRET_KEY not set (endpoints unprotected)
-  if (!process.env.API_SECRET_KEY) {
-    logger.warn("API_SECRET_KEY not set - REST endpoints are unprotected");
   }
 
   logger.info("Environment validation passed");
@@ -335,8 +338,13 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       }
     }
 
-    // Send to dashboard
+    // Send to dashboard (job/lead)
     const dashboardResult = await sendJobToDashboard(conversationState, payload.call);
+
+    // Also sync call record to dashboard for history tracking (non-blocking)
+    sendCallToDashboard(conversationState, payload.call).catch((err) => {
+      logger.warn({ callId, error: err }, "Call history sync failed (non-fatal)");
+    });
 
     if (dashboardResult.success) {
       // Mark session as synced
@@ -365,6 +373,9 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
 // Each function has its own endpoint
 // ============================================
 
+// ALL Retell webhooks must be authenticated
+app.use("/webhook/retell", retellWebhookAuth);
+
 interface RetellFunctionWebhook {
   call: {
     call_id: string;
@@ -376,34 +387,42 @@ interface RetellFunctionWebhook {
   args: Record<string, unknown>;
 }
 
-// Track conversation state across webhook calls (for Retell built-in LLM)
-const webhookCallStates = new Map<string, ConversationState>();
+// In-memory state is not used for scalability. State is persisted in Supabase.
+// const webhookCallStates = new Map<string, ConversationState>();
 
 /**
- * Get or create conversation state for a call
+ * Get or create conversation state for a call from Supabase
  */
-function getOrCreateWebhookState(call: RetellFunctionWebhook["call"]): ConversationState {
+async function getOrCreateWebhookState(call: RetellFunctionWebhook["call"]): Promise<ConversationState> {
   const callId = call.call_id;
 
-  if (!webhookCallStates.has(callId)) {
-    // Determine call direction and customer phone from caller ID
-    const direction = call.direction || (call.from_number ? "inbound" : "outbound");
-    const customerPhone = direction === "inbound" ? call.from_number : call.to_number;
+  const state = await getCallSession(callId);
 
-    webhookCallStates.set(callId, {
-      callId,
-      callDirection: direction,
-      customerPhone: customerPhone || undefined,
-      phoneFromCallerId: Boolean(customerPhone),
-      appointmentBooked: false,
-      isSafetyEmergency: false,
-      isUrgentEscalation: false,
-    });
-
-    logger.info({ callId, direction, hasCallerIdPhone: Boolean(customerPhone) }, "Created webhook call state");
+  if (state) {
+    logger.info({ callId }, "Found existing call session in Supabase");
+    return state;
   }
 
-  return webhookCallStates.get(callId)!;
+  // Determine call direction and customer phone from caller ID
+  const direction = call.direction || (call.from_number ? "inbound" : "outbound");
+  const customerPhone = direction === "inbound" ? call.from_number : call.to_number;
+
+  const newState: ConversationState = {
+    callId,
+    callDirection: direction,
+    customerPhone: customerPhone || undefined,
+    phoneFromCallerId: Boolean(customerPhone),
+    appointmentBooked: false,
+    isSafetyEmergency: false,
+    isUrgentEscalation: false,
+  };
+
+  // Save the new state to the database
+  await saveCallSession(newState);
+
+  logger.info({ callId, direction, hasCallerIdPhone: Boolean(customerPhone) }, "Created new call session in Supabase");
+
+  return newState;
 }
 
 /**
@@ -413,7 +432,7 @@ app.post("/webhook/retell/validate_service_area", async (req: Request, res: Resp
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const state = getOrCreateWebhookState(call);
+    const state = await getOrCreateWebhookState(call);
 
     logger.info({ callId: state.callId, args }, "validate_service_area called");
 
@@ -437,7 +456,7 @@ app.post("/webhook/retell/check_calendar_availability", async (req: Request, res
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const state = getOrCreateWebhookState(call);
+    const state = await getOrCreateWebhookState(call);
 
     logger.info({ callId: state.callId, args }, "check_calendar_availability called");
 
@@ -450,6 +469,7 @@ app.post("/webhook/retell/check_calendar_availability", async (req: Request, res
 
     // Track urgency in state
     state.urgency = urgency as UrgencyLevel;
+    await saveCallSession(state); // Persist state change
 
     logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "check_calendar_availability completed");
     return res.json(result);
@@ -466,7 +486,7 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const state = getOrCreateWebhookState(call);
+    const state = await getOrCreateWebhookState(call);
 
     logger.info({ callId: state.callId, args }, "book_appointment called");
 
@@ -501,6 +521,8 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
       state.equipmentBrand = args.equipment_brand as string | undefined;
       state.equipmentLocation = args.equipment_location as string | undefined;
       state.equipmentAge = args.equipment_age as string | undefined;
+
+      await saveCallSession(state); // Persist state change
     }
 
     logger.info({ callId: state.callId, latencyMs: Date.now() - startTime, booked: result.success }, "book_appointment completed");
@@ -518,7 +540,7 @@ app.post("/webhook/retell/lookup_booking", async (req: Request, res: Response) =
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const state = getOrCreateWebhookState(call);
+    const state = await getOrCreateWebhookState(call);
 
     // Use phone from args, or fall back to caller ID
     const phone = (args.phone as string) || state.customerPhone;
@@ -537,6 +559,7 @@ app.post("/webhook/retell/lookup_booking", async (req: Request, res: Response) =
     // Store booking UID in state if found (for subsequent cancel/reschedule)
     if (result.found && result.booking) {
       state.appointmentId = result.booking.uid;
+      await saveCallSession(state); // Persist state change
     }
 
     logger.info({ callId: state.callId, found: result.found, latencyMs: Date.now() - startTime }, "lookup_booking completed");
@@ -554,7 +577,7 @@ app.post("/webhook/retell/cancel_booking", async (req: Request, res: Response) =
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const state = getOrCreateWebhookState(call);
+    const state = await getOrCreateWebhookState(call);
 
     // Use booking_uid from args, or from state (set by lookup_booking)
     const bookingUid = (args.booking_uid as string) || state.appointmentId;
@@ -576,6 +599,7 @@ app.post("/webhook/retell/cancel_booking", async (req: Request, res: Response) =
     if (result.success) {
       state.appointmentBooked = false;
       state.appointmentId = undefined;
+      await saveCallSession(state); // Persist state change
     }
 
     logger.info({ callId: state.callId, success: result.success, latencyMs: Date.now() - startTime }, "cancel_booking completed");
@@ -593,7 +617,7 @@ app.post("/webhook/retell/reschedule_booking", async (req: Request, res: Respons
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const state = getOrCreateWebhookState(call);
+    const state = await getOrCreateWebhookState(call);
 
     // Use booking_uid from args, or from state (set by lookup_booking)
     const bookingUid = (args.booking_uid as string) || state.appointmentId;
@@ -620,6 +644,7 @@ app.post("/webhook/retell/reschedule_booking", async (req: Request, res: Respons
     // Update state
     if (result.success) {
       state.appointmentDateTime = newDateTime;
+      await saveCallSession(state); // Persist state change
     }
 
     logger.info({ callId: state.callId, success: result.success, latencyMs: Date.now() - startTime }, "reschedule_booking completed");
@@ -637,7 +662,7 @@ app.post("/webhook/retell/send_emergency_alert", async (req: Request, res: Respo
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const state = getOrCreateWebhookState(call);
+    const state = await getOrCreateWebhookState(call);
 
     logger.info({ callId: state.callId, args }, "send_emergency_alert called");
 
@@ -646,6 +671,19 @@ app.post("/webhook/retell/send_emergency_alert", async (req: Request, res: Respo
       callerPhone: args.caller_phone as string,
       address: args.address as string,
       callbackMinutes: 15,
+    });
+
+    // Sync emergency alert to dashboard for tracking (non-blocking)
+    sendEmergencyAlertToDashboard(state.callId, {
+      alertId: result.alertId,
+      callerPhone: args.caller_phone as string,
+      customerName: state.customerName,
+      address: args.address as string,
+      urgencyDescription: args.urgency_description as string,
+      callbackMinutes: 15,
+      smsMessageSid: result.alertId,
+    }).catch((err) => {
+      logger.warn({ callId: state.callId, error: err }, "Emergency alert dashboard sync failed (non-fatal)");
     });
 
     // Track emergency escalation in state
@@ -659,6 +697,8 @@ app.post("/webhook/retell/send_emergency_alert", async (req: Request, res: Respo
     // Equipment details (captured when customer volunteers)
     state.equipmentType = args.equipment_type as string | undefined;
     state.equipmentLocation = args.equipment_location as string | undefined;
+
+    await saveCallSession(state); // Persist state change
 
     logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "send_emergency_alert completed");
     return res.json(result);
@@ -675,7 +715,7 @@ app.post("/webhook/retell/send_sales_lead_alert", async (req: Request, res: Resp
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const state = getOrCreateWebhookState(call);
+    const state = await getOrCreateWebhookState(call);
 
     logger.info({ callId: state.callId, args }, "send_sales_lead_alert called");
 
@@ -696,6 +736,8 @@ app.post("/webhook/retell/send_sales_lead_alert", async (req: Request, res: Resp
     state.equipmentAge = args.equipment_age as string | undefined;
     state.salesLeadNotes = args.notes as string | undefined;
 
+    await saveCallSession(state); // Persist state change
+
     logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "send_sales_lead_alert completed");
     return res.json(result);
   } catch (error) {
@@ -703,7 +745,6 @@ app.post("/webhook/retell/send_sales_lead_alert", async (req: Request, res: Resp
     return res.status(500).json({ error: "Tool execution failed" });
   }
 });
-
 /**
  * Get customer status/history - allows customers to ask "what's my status?"
  */
@@ -711,7 +752,7 @@ app.post("/webhook/retell/get_customer_status", async (req: Request, res: Respon
   const startTime = Date.now();
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const state = getOrCreateWebhookState(call);
+    const state = await getOrCreateWebhookState(call);
 
     // Use phone from args, or fall back to caller ID
     const phone = (args.phone as string) || state.customerPhone;
@@ -730,6 +771,7 @@ app.post("/webhook/retell/get_customer_status", async (req: Request, res: Respon
     // Update state with customer name if found
     if (result.customerName && !state.customerName) {
       state.customerName = result.customerName;
+      await saveCallSession(state); // Persist state change
     }
 
     logger.info(
@@ -755,7 +797,7 @@ app.post("/webhook/retell/get_customer_status", async (req: Request, res: Respon
 app.post("/webhook/retell/end_call", async (req: Request, res: Response) => {
   try {
     const { call, args } = req.body as RetellFunctionWebhook;
-    const state = getOrCreateWebhookState(call);
+    const state = await getOrCreateWebhookState(call);
     const reason = args.reason as string;
 
     // Update state with end call reason (cast to EndCallReason type)
@@ -795,12 +837,6 @@ app.post("/webhook/retell/end_call", async (req: Request, res: Response) => {
     } catch (saveError) {
       logger.error({ callId: state.callId, error: saveError }, "Failed to save call state to Supabase");
     }
-
-    // Clean up in-memory state after a delay (give post-call webhook time to fire)
-    setTimeout(() => {
-      webhookCallStates.delete(state.callId);
-      logger.debug({ callId: state.callId }, "Cleaned up webhook call state");
-    }, 60000); // 60 second delay
 
     return res.json({ success: true, reason });
   } catch (error) {

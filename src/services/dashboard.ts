@@ -330,3 +330,226 @@ export async function sendJobToDashboard(
 export function isDashboardEnabled(): boolean {
   return isDashboardConfigured;
 }
+
+/**
+ * Payload for syncing call records to dashboard
+ */
+export interface DashboardCallPayload {
+  call_id: string;
+  retell_call_id?: string;
+  phone_number: string;
+  customer_name?: string;
+  started_at: string;
+  ended_at?: string;
+  duration_seconds?: number;
+  direction?: "inbound" | "outbound";
+  outcome?: EndCallReason;
+  hvac_issue_type?: string;
+  urgency_tier?: string;
+  problem_description?: string;
+  revenue_tier_label?: string;
+  revenue_tier_signals?: string[];
+  job_id?: string;
+  lead_id?: string;
+  user_email: string;
+}
+
+/**
+ * Send call record to dashboard for history tracking
+ */
+export async function sendCallToDashboard(
+  state: ConversationState,
+  retellData?: RetellPostCallData
+): Promise<{ success: boolean; callId?: string; error?: string }> {
+  if (!isDashboardConfigured) {
+    log.warn({ callId: state.callId }, "Dashboard not configured - skipping call sync");
+    return { success: false, error: "Dashboard not configured" };
+  }
+
+  // Calculate revenue estimate for signals
+  const estimate = estimateRevenue(state);
+
+  // Calculate duration if we have both start and end times
+  let durationSeconds: number | undefined;
+  if (retellData?.start_timestamp && retellData?.end_timestamp) {
+    durationSeconds = Math.round(
+      (retellData.end_timestamp - retellData.start_timestamp) / 1000
+    );
+  }
+
+  const payload: DashboardCallPayload = {
+    call_id: state.callId,
+    retell_call_id: retellData?.call_id,
+    phone_number: state.customerPhone || "Unknown",
+    customer_name: state.customerName,
+    started_at: retellData?.start_timestamp
+      ? new Date(retellData.start_timestamp).toISOString()
+      : new Date().toISOString(),
+    ended_at: retellData?.end_timestamp
+      ? new Date(retellData.end_timestamp).toISOString()
+      : undefined,
+    duration_seconds: durationSeconds,
+    direction: state.callDirection || "inbound",
+    outcome: state.endCallReason,
+    hvac_issue_type: state.hvacIssueType,
+    urgency_tier: state.urgencyTier,
+    problem_description: state.problemDescription,
+    revenue_tier_label: estimate.tierLabel,
+    revenue_tier_signals: estimate.signals,
+    user_email: DASHBOARD_USER_EMAIL!,
+  };
+
+  log.info(
+    {
+      callId: state.callId,
+      phone: maskPhone(payload.phone_number),
+      outcome: payload.outcome,
+    },
+    "Sending call to dashboard"
+  );
+
+  try {
+    // Build calls webhook URL from jobs webhook URL
+    const callsWebhookUrl = DASHBOARD_WEBHOOK_URL!.replace(
+      "/api/webhook/jobs",
+      "/api/webhook/calls"
+    );
+
+    const response = await fetchWithRetry(
+      callsWebhookUrl,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Webhook-Secret": DASHBOARD_WEBHOOK_SECRET!,
+        },
+        body: JSON.stringify(payload),
+      },
+      { retries: 2, timeout: 10000 }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      log.warn(
+        { callId: state.callId, status: response.status, error: errorText },
+        "Call sync to dashboard failed (non-fatal)"
+      );
+      return { success: false, error: `HTTP ${response.status}` };
+    }
+
+    const result = (await response.json()) as { success: boolean; call_id?: string };
+
+    log.info(
+      { callId: state.callId, dashboardCallId: result.call_id },
+      "Call synced to dashboard"
+    );
+
+    return { success: true, callId: result.call_id };
+  } catch (error) {
+    log.warn({ callId: state.callId, error }, "Call sync to dashboard failed (non-fatal)");
+    return { success: false, error: String(error) };
+  }
+}
+
+/**
+ * Payload for syncing emergency alerts to dashboard
+ */
+export interface DashboardAlertPayload {
+  alert_id?: string;
+  call_id?: string;
+  phone_number: string;
+  customer_name?: string;
+  customer_address?: string;
+  urgency_tier?: string;
+  problem_description: string;
+  sms_sent_at: string;
+  sms_message_sid?: string;
+  callback_promised_minutes: number;
+  user_email: string;
+}
+
+/**
+ * Send emergency alert to dashboard for tracking
+ */
+export async function sendEmergencyAlertToDashboard(
+  callId: string,
+  params: {
+    alertId?: string;
+    callerPhone: string;
+    customerName?: string;
+    address?: string;
+    urgencyDescription: string;
+    callbackMinutes: number;
+    smsMessageSid?: string;
+  }
+): Promise<{ success: boolean; alertId?: string; error?: string }> {
+  if (!isDashboardConfigured) {
+    log.warn({ callId }, "Dashboard not configured - skipping alert sync");
+    return { success: false, error: "Dashboard not configured" };
+  }
+
+  const payload: DashboardAlertPayload = {
+    alert_id: params.alertId,
+    call_id: callId,
+    phone_number: params.callerPhone,
+    customer_name: params.customerName,
+    customer_address: params.address,
+    urgency_tier: "Urgent",
+    problem_description: params.urgencyDescription,
+    sms_sent_at: new Date().toISOString(),
+    sms_message_sid: params.smsMessageSid,
+    callback_promised_minutes: params.callbackMinutes,
+    user_email: DASHBOARD_USER_EMAIL!,
+  };
+
+  log.info(
+    {
+      callId,
+      phone: maskPhone(params.callerPhone),
+      callbackMinutes: params.callbackMinutes,
+    },
+    "Sending emergency alert to dashboard"
+  );
+
+  try {
+    // Build alerts webhook URL from jobs webhook URL
+    const alertsWebhookUrl = DASHBOARD_WEBHOOK_URL!.replace(
+      "/api/webhook/jobs",
+      "/api/webhook/emergency-alerts"
+    );
+
+    const response = await fetchWithRetry(
+      alertsWebhookUrl,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Webhook-Secret": DASHBOARD_WEBHOOK_SECRET!,
+        },
+        body: JSON.stringify(payload),
+      },
+      { retries: 2, timeout: 10000 }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      log.warn(
+        { callId, status: response.status, error: errorText },
+        "Alert sync to dashboard failed (non-fatal)"
+      );
+      return { success: false, error: `HTTP ${response.status}` };
+    }
+
+    const result = (await response.json()) as { success: boolean; alert_id?: string };
+
+    log.info(
+      { callId, dashboardAlertId: result.alert_id },
+      "Emergency alert synced to dashboard"
+    );
+
+    return { success: true, alertId: result.alert_id };
+  } catch (error) {
+    log.warn({ callId, error }, "Alert sync to dashboard failed (non-fatal)");
+    return { success: false, error: String(error) };
+  }
+}
