@@ -15,6 +15,13 @@ const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER;
 const EMERGENCY_SMS_NUMBER = process.env.EMERGENCY_SMS_NUMBER;
 
+// Dashboard webhook for SMS context (for reply tracking)
+const DASHBOARD_WEBHOOK_URL = process.env.DASHBOARD_WEBHOOK_URL;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+
+// Reply code instructions for SMS
+const REPLY_INSTRUCTIONS = "Reply: 1=Called 2=VM 3=Note 4=Booked 5=Lost";
+
 /**
  * Send an emergency SMS alert to the dispatcher/owner
  *
@@ -29,12 +36,13 @@ export async function sendEmergencyAlert(
 ): Promise<EmergencyAlertResult> {
   const { urgencyDescription, callerPhone, address, callbackMinutes } = params;
 
-  // Format the SMS message
+  // Format the SMS message with reply instructions
   const smsMessage = [
     `URGENT: ${urgencyDescription}`,
     `Caller: ${formatPhone(callerPhone)}`,
     `Address: ${address}`,
     `Promised callback within ${callbackMinutes} min`,
+    REPLY_INSTRUCTIONS,
   ].join("\n");
 
   log.info(
@@ -55,6 +63,13 @@ export async function sendEmergencyAlert(
   ) {
     try {
       const result = await sendTwilioSMS(EMERGENCY_SMS_NUMBER, smsMessage);
+
+      // Save context to dashboard for reply tracking
+      await saveAlertContextToDashboard({
+        alertType: "emergency",
+        customerPhone: callerPhone,
+      });
+
       return result;
     } catch (error) {
       if (error instanceof FetchError) {
@@ -145,7 +160,7 @@ export async function sendSalesLeadAlert(
   if (equipmentAge) equipmentParts.push(equipmentAge);
   const equipmentDesc = equipmentParts.length > 0 ? equipmentParts.join(", ") : "Not specified";
 
-  // Format the SMS message
+  // Format the SMS message with reply instructions
   const messageLines = [
     `SALES LEAD: ${currentEquipment || "HVAC"} Replacement`,
     customerName ? `Customer: ${customerName}` : null,
@@ -153,7 +168,7 @@ export async function sendSalesLeadAlert(
     address ? `Address: ${address}` : null,
     `Equipment: ${equipmentDesc}`,
     notes ? `Notes: ${notes}` : null,
-    `Promised callback`,
+    REPLY_INSTRUCTIONS,
   ].filter(Boolean);
 
   const smsMessage = messageLines.join("\n");
@@ -176,6 +191,14 @@ export async function sendSalesLeadAlert(
   ) {
     try {
       const result = await sendTwilioSMS(EMERGENCY_SMS_NUMBER, smsMessage);
+
+      // Save context to dashboard for reply tracking
+      await saveAlertContextToDashboard({
+        alertType: "sales_lead",
+        customerPhone,
+        customerName,
+      });
+
       return {
         success: result.success,
         alertId: result.alertId,
@@ -222,4 +245,50 @@ function formatPhone(phone: string): string {
 
   // Return as-is if other format
   return phone;
+}
+
+/**
+ * Save SMS context to dashboard for reply tracking
+ * This allows operators to reply to SMS alerts and update leads
+ */
+async function saveAlertContextToDashboard(params: {
+  alertType: "emergency" | "sales_lead";
+  customerPhone: string;
+  customerName?: string;
+}): Promise<void> {
+  if (!DASHBOARD_WEBHOOK_URL || !WEBHOOK_SECRET || !EMERGENCY_SMS_NUMBER) {
+    log.info("Dashboard webhook not configured - skipping context save");
+    return;
+  }
+
+  const contextUrl = DASHBOARD_WEBHOOK_URL.replace("/api/webhook/jobs", "/api/sms-context");
+
+  try {
+    const response = await fetchWithRetry(
+      contextUrl,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Webhook-Secret": WEBHOOK_SECRET,
+        },
+        body: JSON.stringify({
+          operator_phone: EMERGENCY_SMS_NUMBER,
+          alert_type: params.alertType,
+          customer_phone: params.customerPhone,
+          customer_name: params.customerName || null,
+        }),
+      },
+      { retries: 1, timeout: 5000 }
+    );
+
+    if (response.ok) {
+      const data = await response.json() as { success: boolean; lead_id?: string };
+      log.info({ leadId: data.lead_id }, "SMS context saved to dashboard");
+    } else {
+      log.warn({ status: response.status }, "Failed to save SMS context to dashboard");
+    }
+  } catch (error) {
+    log.warn({ error }, "Error saving SMS context to dashboard (non-fatal)");
+  }
 }
