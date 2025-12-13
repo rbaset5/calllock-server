@@ -59,6 +59,8 @@ export interface DashboardJobPayload {
   problem_onset?: string;
   problem_pattern?: string;
   customer_attempted_fixes?: string;
+  // Call tracking
+  call_id?: string;
 }
 
 /**
@@ -252,6 +254,8 @@ export function transformToDashboardPayload(
     problem_onset: state.problemOnset,
     problem_pattern: state.problemPattern,
     customer_attempted_fixes: state.customerAttemptedFixes,
+    // Call tracking - links lead/job to call record
+    call_id: state.callId,
   };
 }
 
