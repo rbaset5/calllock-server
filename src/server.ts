@@ -23,6 +23,7 @@ import {
   validateServiceArea,
 } from "./functions/index.js";
 import { sendEmergencyAlert, sendSalesLeadAlert } from "./services/alerts.js";
+import { getCustomerHistory } from "./services/customer-history.js";
 
 // Infrastructure imports
 import { logger, maskPhone } from "./utils/logger.js";
@@ -699,6 +700,51 @@ app.post("/webhook/retell/send_sales_lead_alert", async (req: Request, res: Resp
     return res.json(result);
   } catch (error) {
     logger.error({ error }, "send_sales_lead_alert failed");
+    return res.status(500).json({ error: "Tool execution failed" });
+  }
+});
+
+/**
+ * Get customer status/history - allows customers to ask "what's my status?"
+ */
+app.post("/webhook/retell/get_customer_status", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const state = getOrCreateWebhookState(call);
+
+    // Use phone from args, or fall back to caller ID
+    const phone = (args.phone as string) || state.customerPhone;
+
+    if (!phone) {
+      return res.json({
+        found: false,
+        message: "I don't have a phone number to look up. Can you give me the phone number on your account?",
+      });
+    }
+
+    logger.info({ callId: state.callId, phone: maskPhone(phone) }, "get_customer_status called");
+
+    const result = await getCustomerHistory(phone);
+
+    // Update state with customer name if found
+    if (result.customerName && !state.customerName) {
+      state.customerName = result.customerName;
+    }
+
+    logger.info(
+      {
+        callId: state.callId,
+        found: result.found,
+        hasAppointment: Boolean(result.upcomingAppointment),
+        latencyMs: Date.now() - startTime,
+      },
+      "get_customer_status completed"
+    );
+
+    return res.json(result);
+  } catch (error) {
+    logger.error({ error }, "get_customer_status failed");
     return res.status(500).json({ error: "Tool execution failed" });
   }
 });

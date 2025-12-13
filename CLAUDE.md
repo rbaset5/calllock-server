@@ -103,6 +103,13 @@ If customer wants to reschedule or cancel an existing appointment:
   - For reschedule: "When would you like to reschedule?" → check_calendar_availability → offer slots → call reschedule_booking → end_call(reason="rescheduled")
 → If not found: "I don't see an appointment under this number. Would you like to schedule a new one?"
 
+STATUS INQUIRY (customer asks "what's my status?", "do I have an appointment?", "check my file", "any updates?"):
+→ "Let me look that up for you."
+→ Call get_customer_status (uses caller ID automatically)
+→ Read the message from the response to the customer
+→ If not found: "I don't see any history under this number. Would you like to schedule a service visit?"
+→ After status: "Is there anything else I can help you with today?"
+
 RULES:
 - NEVER include parenthetical notes or internal reasoning—everything is spoken aloud
 - Keep responses SHORT (1-2 sentences max)
@@ -291,6 +298,12 @@ Sends SMS alert for replacement/sales inquiries.
 - **Returns:** `{ success: boolean, alertId?, message: string }`
 - **Side Effect:** Sends SMS to owner with lead details
 
+### `POST /webhook/retell/get_customer_status`
+Looks up customer's account history and status.
+- **Args:** `{ phone?: string }` (optional - defaults to caller ID)
+- **Returns:** `{ found: boolean, customerName?, upcomingAppointment?, recentCalls: [], pastAppointments: [], urgentAlert?, message: string }`
+- **Note:** The `message` field contains a human-readable summary for the AI to speak
+
 ### `POST /webhook/retell/end_call`
 Saves conversation state to Supabase before call ends.
 - **Args:** `{ reason, customer_name?, customer_phone?, customer_address?, problem_description?, urgency?, ... }`
@@ -456,6 +469,26 @@ When adding new tools, configure them in **Retell Dashboard → Agent → Functi
     }
   },
   "required": ["new_date_time"]
+}
+```
+
+---
+
+### get_customer_status
+- **Name:** `get_customer_status`
+- **Description:** Look up customer's account history and status (appointments, recent calls, alerts)
+- **API Endpoint:** `POST` `https://calllock-server.onrender.com/webhook/retell/get_customer_status`
+- **Parameters (JSON Schema):**
+```json
+{
+  "type": "object",
+  "properties": {
+    "phone": {
+      "type": "string",
+      "description": "Phone number to look up (defaults to caller ID)"
+    }
+  },
+  "required": []
 }
 ```
 
