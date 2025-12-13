@@ -53,11 +53,25 @@ interface EmergencyAlertRecord {
 }
 
 /**
+ * Customer note record from Supabase (operator updates)
+ */
+interface CustomerNoteRecord {
+  id: string;
+  phone_number: string;
+  note: string;
+  created_by?: string;
+  created_at: string;
+  expires_at?: string;
+  is_active: boolean;
+}
+
+/**
  * Customer history result returned to the AI
  */
 export interface CustomerHistoryResult {
   found: boolean;
   customerName?: string;
+  operatorNotes: string[]; // Active notes from operator to read to customer
   upcomingAppointment?: {
     date: string;
     time: string;
@@ -195,6 +209,11 @@ function formatOutcome(outcome?: string): string {
 function buildSummaryMessage(result: CustomerHistoryResult): string {
   const parts: string[] = [];
 
+  // Operator notes first (most important updates)
+  if (result.operatorNotes.length > 0) {
+    parts.push(`Quick update: ${result.operatorNotes.join(" Also, ")}`);
+  }
+
   // Greeting with name if available
   if (result.customerName) {
     parts.push(`I found your account, ${result.customerName}.`);
@@ -250,12 +269,28 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
   // Start with empty result
   const result: CustomerHistoryResult = {
     found: false,
+    operatorNotes: [],
     recentCalls: [],
     pastAppointments: [],
     message: "",
   };
 
-  // 1. Check Cal.com for upcoming appointment
+  // 1. Check for active operator notes (highest priority)
+  const notes = await supabaseQuery<CustomerNoteRecord>(
+    "customer_notes",
+    `phone_number=eq.${encodeURIComponent(normalizedPhone)}&is_active=eq.true&order=created_at.desc`
+  );
+
+  if (notes && notes.length > 0) {
+    result.found = true;
+    // Filter out expired notes and extract note text
+    const now = new Date();
+    result.operatorNotes = notes
+      .filter((n) => !n.expires_at || new Date(n.expires_at) > now)
+      .map((n) => n.note);
+  }
+
+  // 2. Check Cal.com for upcoming appointment (parallel with notes)
   const calResult = await lookupBookingByPhone(phone);
   if (calResult.found && calResult.booking) {
     result.found = true;
@@ -345,6 +380,7 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
       found: result.found,
       hasAppointment: Boolean(result.upcomingAppointment),
       callCount: result.recentCalls.length,
+      notesCount: result.operatorNotes.length,
     },
     "Customer history lookup complete"
   );
