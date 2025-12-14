@@ -26,6 +26,12 @@ if (!isDashboardConfigured) {
 /**
  * Dashboard webhook expected payload
  */
+/** Structured transcript message from Retell */
+export interface TranscriptMessage {
+  role: "agent" | "user";
+  content: string;
+}
+
 export interface DashboardJobPayload {
   customer_name: string;
   customer_phone: string;
@@ -35,6 +41,7 @@ export interface DashboardJobPayload {
   ai_summary?: string;
   scheduled_at?: string;
   call_transcript?: string;
+  transcript_object?: TranscriptMessage[];  // Structured transcript with speaker labels
   user_email: string;
   // Revenue tier classification (replaces granular dollar estimates)
   revenue_tier?: RevenueTier;
@@ -231,6 +238,7 @@ export function transformToDashboardPayload(
     ai_summary: buildAiSummary(state, retellData),
     scheduled_at: state.appointmentDateTime,
     call_transcript: retellData?.transcript,
+    transcript_object: retellData?.transcript_object,  // Structured transcript with speaker labels
     user_email: DASHBOARD_USER_EMAIL!,
     // Revenue tier classification
     revenue_tier: estimate.tier,
@@ -353,6 +361,7 @@ export interface DashboardCallPayload {
   problem_description?: string;
   revenue_tier_label?: string;
   revenue_tier_signals?: string[];
+  transcript_object?: TranscriptMessage[];  // Structured transcript with speaker labels
   job_id?: string;
   lead_id?: string;
   user_email: string;
@@ -400,6 +409,7 @@ export async function sendCallToDashboard(
     problem_description: state.problemDescription,
     revenue_tier_label: estimate.tierLabel,
     revenue_tier_signals: estimate.signals,
+    transcript_object: retellData?.transcript_object,  // Structured transcript with speaker labels
     user_email: DASHBOARD_USER_EMAIL!,
   };
 
