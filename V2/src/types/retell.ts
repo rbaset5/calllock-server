@@ -338,3 +338,6 @@ export interface RetellCallAnalysis {
   call_successful?: boolean;
   custom_analysis_data?: CustomAnalysisData;
 }
+
+// Re-export priority types for dashboard integration
+export type { PriorityColor, PriorityResult } from "../services/priority-detection.js";

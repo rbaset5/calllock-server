@@ -7,6 +7,7 @@ import { ConversationState, UrgencyTier, EndCallReason, RetellPostCallData, Reve
 import { createModuleLogger, maskPhone } from "../utils/logger.js";
 import { fetchWithRetry, FetchError } from "../utils/fetch.js";
 import { estimateRevenue, RevenueEstimate } from "./revenue-estimation.js";
+import { detectPriority, PriorityColor } from "./priority-detection.js";
 
 const log = createModuleLogger("dashboard");
 
@@ -68,6 +69,9 @@ export interface DashboardJobPayload {
   customer_attempted_fixes?: string;
   // Call tracking
   call_id?: string;
+  // V4 Priority color classification
+  priority_color?: PriorityColor;
+  priority_reason?: string;
 }
 
 /**
@@ -221,6 +225,9 @@ export function transformToDashboardPayload(
   // Calculate revenue estimate
   const estimate = estimateRevenue(state);
 
+  // Detect priority color for V4 dashboard
+  const priority = detectPriority(state, retellData?.transcript, estimate);
+
   // For sales leads, create a descriptive title from equipment info
   const issueDescription = state.endCallReason === "sales_lead"
     ? buildSalesLeadTitle(state.equipmentType, state.equipmentAge)
@@ -264,6 +271,9 @@ export function transformToDashboardPayload(
     customer_attempted_fixes: state.customerAttemptedFixes,
     // Call tracking - links lead/job to call record
     call_id: state.callId,
+    // V4 Priority classification
+    priority_color: priority.color,
+    priority_reason: priority.reason,
   };
 }
 
@@ -364,6 +374,9 @@ export interface DashboardCallPayload {
   transcript_object?: TranscriptMessage[];  // Structured transcript with speaker labels
   job_id?: string;
   lead_id?: string;
+  // V4 Priority color classification
+  priority_color?: PriorityColor;
+  priority_reason?: string;
   user_email: string;
 }
 
@@ -381,6 +394,9 @@ export async function sendCallToDashboard(
 
   // Calculate revenue estimate for signals
   const estimate = estimateRevenue(state);
+
+  // Detect priority for call record
+  const priority = detectPriority(state, retellData?.transcript, estimate);
 
   // Calculate duration if we have both start and end times
   let durationSeconds: number | undefined;
@@ -410,6 +426,9 @@ export async function sendCallToDashboard(
     revenue_tier_label: estimate.tierLabel,
     revenue_tier_signals: estimate.signals,
     transcript_object: retellData?.transcript_object,  // Structured transcript with speaker labels
+    // V4 Priority classification
+    priority_color: priority.color,
+    priority_reason: priority.reason,
     user_email: DASHBOARD_USER_EMAIL!,
   };
 

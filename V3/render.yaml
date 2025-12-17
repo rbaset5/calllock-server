@@ -1,0 +1,67 @@
+services:
+  - type: web
+    name: calllock-hvac
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      # Required
+      - key: NODE_ENV
+        value: production
+      - key: RETELL_API_KEY
+        sync: false
+
+      # Business Configuration
+      - key: BUSINESS_NAME
+        value: ACE Cooling
+      - key: SERVICE_AREA
+        value: Austin and surrounding areas within 30 miles
+      - key: BUSINESS_PHONE
+        value: +15125551234
+      - key: SERVICE_AREA_ZIPS
+        value: 78701,78702,78703,78704,78705,78721,78722,78723,78724,78725
+
+      # HVAC Emergency Thresholds
+      - key: HVAC_EMERGENCY_HEAT_THRESHOLD_F
+        value: "40"
+      - key: HVAC_EMERGENCY_COOL_THRESHOLD_F
+        value: "100"
+      - key: EMERGENCY_CALLBACK_MINUTES
+        value: "15"
+
+      # Emergency Escalation
+      - key: ON_CALL_PHONE_NUMBER
+        sync: false
+      - key: EMERGENCY_SMS_NUMBER
+        sync: false
+
+      # Cal.com
+      - key: CAL_COM_API_KEY
+        sync: false
+
+      # Supabase
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
+      # Twilio (optional)
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
+
+      # CallLock Dashboard Integration
+      - key: DASHBOARD_WEBHOOK_URL
+        sync: false
+      - key: DASHBOARD_WEBHOOK_SECRET
+        sync: false
+      - key: DASHBOARD_USER_EMAIL
+        sync: false
+
+      # Keep-alive ping
+      - key: RENDER_URL
+        sync: false
