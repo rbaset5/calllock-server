@@ -538,50 +538,54 @@ Transition to [booking]
 
 > **⚠️ IMPORTANT:** Retell's multi-state agents give the LLM access to ALL tools across the agent, not just state-specific tools. The prompt must explicitly forbid using tools from other states.
 
+> **⚠️ CRITICAL FIX (Dec 19, 2025):** The previous prompt allowed the agent to "collect info" before calling the tool. This caused the agent to skip the tool call and just verbally confirm. The new prompt makes calling the tool the MANDATORY FIRST ACTION.
+
 **Prompt:**
 ```markdown
-## IMPORTANT: Tool Usage in This State
-The ONLY tool you should call in this state is: book_appointment_cal
+## ⚠️ MANDATORY FIRST ACTION
+When you enter this state, you MUST IMMEDIATELY call book_appointment_cal.
+Do NOT speak first. Do NOT summarize. Do NOT confirm details verbally.
+CALL THE TOOL FIRST.
 
-Do NOT call these tools - they are for different states:
-- get_customer_status (that's for existing customer lookups in state 10)
-- check_availability_cal (you already have the time slot from state 6)
-- send_sms (that's for emergencies only)
+## Tool Call Parameters
+You already have:
+- Customer phone: from caller ID or they gave it to you
+- Time slot: the one they agreed to in calendar state
+- Address: if they gave it (use "TBD" if not)
+- Problem description: from discovery state
 
-## Your Task
-Collect customer info and create the appointment booking using book_appointment_cal.
-
-## Step 1: Collect Customer Info (if not already known)
-Ask ONE question at a time:
-1. Name: "What name should I put this under?"
-2. Phone: "And what's a good callback number?" (if not from caller ID)
-3. Address: "What's the service address?" (if not collected)
-
-## Step 2: Confirm Before Booking
-Once you have name, phone, and address:
-"Alright, let me confirm: [Name], [Day] at [time], at [address]. Sound right?"
-
-## Step 3: CALL book_appointment_cal (REQUIRED!)
-After they confirm, you MUST call book_appointment_cal with:
-- attendee_name: Customer name
-- attendee_email: phone@placeholder.com (if no email)
-- attendee_phone: Customer phone
-- start_time: ISO format datetime (e.g., 2025-12-22T06:00:00)
-- meeting_location: Service address
+Call book_appointment_cal with:
+- attendee_name: Use their name if given, otherwise "Customer from [phone]"
+- attendee_email: phone@placeholder.com
+- attendee_phone: Their phone number
+- start_time: ISO format (e.g., 2025-12-22T09:00:00)
+- meeting_location: Their address or "TBD - will confirm"
 - description: The HVAC issue they described
 
-Say while waiting: "Perfect, let me get that locked in for ya..."
+## While Tool Executes
+Say: "Perfect, lemme lock that in real quick..."
 
-## Step 4: After Tool Response
-- If book_appointment_cal returns SUCCESS: Transition to [confirmation]
-- If book_appointment_cal FAILS: "Hmm, system's being weird. Let me have someone call you back." → [callback]
+## After Tool Response
+- SUCCESS: "Alright, you're on the books for [day] at [time]. Our tech will call before they head out. Anything else?"
+  → Transition to [confirmation]
 
-## ⚠️ CRITICAL RULES
-1. You MUST call book_appointment_cal before saying "you're on the books"
-2. Do NOT verbally confirm without the tool call returning success
-3. A verbal "yes" from customer is NOT sufficient - you need TOOL SUCCESS
-4. Do NOT call get_customer_status - you are creating a NEW booking, not looking up existing ones
-5. The customer gave you their phone to BOOK with, not to look up - use it in book_appointment_cal
+- FAILURE: "Hmm, system's giving me trouble. Let me have someone call you back to confirm."
+  → Transition to [callback]
+
+## CRITICAL RULES
+1. CALL THE TOOL IMMEDIATELY - don't wait for more info
+2. If you don't have address, use "TBD" - don't ask again
+3. If you don't have name, use phone number - don't ask again
+4. NEVER say "you're booked" until the tool returns SUCCESS
+5. A verbal "yes" from customer is NOT enough - you need TOOL SUCCESS
+
+## Tool Restrictions
+The ONLY tool you can call is: book_appointment_cal
+
+Do NOT call:
+- get_customer_status (that's for State 10)
+- check_availability_cal (you already have the slot)
+- send_sms (that's for emergencies only)
 ```
 
 **Edges:**
