@@ -75,17 +75,39 @@ The backend sends data to these dashboard endpoints:
 
 ```
 Retell AI Voice Agent
-    ↓ (call ends)
-V2 Backend (Render) - calllock-server.onrender.com
+    ↓ (call ends - POST to Agent Level Webhook URL)
+V2 Backend (Render) - calllock-server.onrender.com/webhook/retell/call-ended
     ↓ sendJobToDashboard()      → POST /api/webhook/jobs
     ↓ sendCallToDashboard()     → POST /api/webhook/calls
     ↓ sendEmergencyAlertToDashboard() → POST /api/webhook/emergency-alerts
 Dashboard (Vercel) - calllock-dashboard-2.vercel.app
     ↓ validates X-Webhook-Secret header
     ↓ finds user by email
-    ↓ inserts into Supabase
+    ↓ deduplicates by call_id (prevents duplicate leads on retry)
+    ↓ inserts new OR updates existing record
 UI displays data
 ```
+
+### Webhook Retry & Deduplication
+
+The backend uses `fetchWithRetry` with 3 retry attempts for webhook calls. The dashboard implements **idempotent webhook handling**:
+
+- **First call**: Creates new lead/job, returns `action: "created"`
+- **Retry (same call_id)**: Updates existing record, returns `action: "updated"`
+
+This ensures no duplicate leads are created when webhooks are retried due to network issues.
+
+### Required Retell Configuration
+
+**CRITICAL**: The Retell agent must have the **Agent Level Webhook URL** configured:
+
+1. Go to Retell Dashboard → Agent Settings → Webhook Settings
+2. Set **Agent Level Webhook URL** to:
+   ```
+   https://calllock-server.onrender.com/webhook/retell/call-ended
+   ```
+
+Without this, Retell never notifies the V2 backend when calls end, and bookings/leads won't sync to the dashboard.
 
 ### Payload Fields
 
