@@ -47,6 +47,61 @@ Logic location: `src/services/revenue-estimation.ts`
 1.  **Incoming Call:** Retell hits `POST /webhook/retell/*`
 2.  **State:** Conversation state is transient. Final outcomes are saved to Supabase via `end_call`.
 3.  **Post-Call:** Retell hits `POST /webhook/retell/call-ended` with transcript/recording -> Syncs to Supabase.
+4.  **Dashboard Sync:** Backend sends data to dashboard via webhooks (see Dashboard Integration below).
+
+## Dashboard Integration
+
+The backend syncs call data to the CallLock Dashboard via webhooks. This is configured via environment variables.
+
+### Required Environment Variables (Render)
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DASHBOARD_WEBHOOK_URL` | Dashboard jobs webhook endpoint | `https://calllock-dashboard-2.vercel.app/api/webhook/jobs` |
+| `DASHBOARD_WEBHOOK_SECRET` | Shared secret for webhook auth | `9d04de2c8cdbdfe...` (generate with `openssl rand -hex 32`) |
+| `DASHBOARD_USER_EMAIL` | Email of dashboard user to sync data to | `user@example.com` |
+
+### Webhook Endpoints
+
+The backend sends data to these dashboard endpoints:
+
+| Function | Endpoint | Data |
+|----------|----------|------|
+| `sendJobToDashboard()` | `/api/webhook/jobs` | Leads (non-bookings) and Jobs (bookings) |
+| `sendCallToDashboard()` | `/api/webhook/calls` | Call records with transcripts |
+| `sendEmergencyAlertToDashboard()` | `/api/webhook/emergency-alerts` | Tier 2 urgent alerts |
+
+### Data Flow Diagram
+
+```
+Retell AI Voice Agent
+    ↓ (call ends)
+V2 Backend (Render) - calllock-server.onrender.com
+    ↓ sendJobToDashboard()      → POST /api/webhook/jobs
+    ↓ sendCallToDashboard()     → POST /api/webhook/calls
+    ↓ sendEmergencyAlertToDashboard() → POST /api/webhook/emergency-alerts
+Dashboard (Vercel) - calllock-dashboard-2.vercel.app
+    ↓ validates X-Webhook-Secret header
+    ↓ finds user by email
+    ↓ inserts into Supabase
+UI displays data
+```
+
+### Payload Fields
+
+Key fields sent to dashboard:
+
+- `customer_name`, `customer_phone`, `customer_address`
+- `call_id`, `started_at`, `ended_at`, `duration_seconds`
+- `outcome` / `end_call_reason` - Determines lead vs job creation
+- `transcript_object` - Speaker-labeled transcript `[{role, content}]`
+- `revenue_tier_label`, `revenue_tier_signals` - Revenue classification
+- `priority_color`, `priority_reason` - V4 priority system
+- `caller_type`, `primary_intent`, `is_callback_complaint` - V3 triage fields
+
+### Service Location
+
+Dashboard sync logic: `src/services/dashboard.ts`
 
 ## Developer Notes
 
