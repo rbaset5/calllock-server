@@ -257,7 +257,17 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
   const appointmentBooked = callData.call_analysis?.call_successful === true;
 
   // Determine end call reason from Retell's disconnection_reason
-  const endCallReason = mapDisconnectionReason(callData.disconnection_reason);
+  let endCallReason = mapDisconnectionReason(callData.disconnection_reason);
+
+  // If agent hung up but no booking was made, treat as callback_later
+  // This ensures callback calls create Leads (not Jobs) in the dashboard
+  if (!endCallReason && callData.disconnection_reason === "agent_hangup") {
+    if (!appointmentBooked) {
+      endCallReason = "callback_later";
+    } else {
+      endCallReason = "completed";
+    }
+  }
 
   return {
     callId: callData.call_id,
