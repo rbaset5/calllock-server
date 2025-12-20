@@ -236,9 +236,14 @@ export function transformToDashboardPayload(
   // Get midpoint value for backwards compatibility
   const estimatedValue = getMidpointValue(estimate.tier);
 
+  // Get phone from Retell call metadata if not in conversation state
+  const phoneFromRetell = retellData?.direction === "inbound"
+    ? retellData?.from_number
+    : retellData?.to_number;
+
   return {
-    customer_name: state.customerName || state.customerPhone || "Unknown Caller",
-    customer_phone: state.customerPhone || "Unknown",
+    customer_name: state.customerName || phoneFromRetell || state.customerPhone || "Unknown Caller",
+    customer_phone: state.customerPhone || phoneFromRetell || "Unknown",
     customer_address: state.serviceAddress || "Not provided",
     service_type: "hvac", // Always HVAC for this system
     urgency: mapUrgencyToDashboard(state.urgencyTier, state.endCallReason),
@@ -406,10 +411,15 @@ export async function sendCallToDashboard(
     );
   }
 
+  // Get phone from Retell call metadata if not in conversation state
+  const callPhoneFromRetell = retellData?.direction === "inbound"
+    ? retellData?.from_number
+    : retellData?.to_number;
+
   const payload: DashboardCallPayload = {
     call_id: state.callId,
     retell_call_id: retellData?.call_id,
-    phone_number: state.customerPhone || "Unknown",
+    phone_number: state.customerPhone || callPhoneFromRetell || "Unknown",
     customer_name: state.customerName,
     started_at: retellData?.start_timestamp
       ? new Date(retellData.start_timestamp).toISOString()
