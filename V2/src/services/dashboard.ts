@@ -8,6 +8,7 @@ import { createModuleLogger, maskPhone } from "../utils/logger.js";
 import { fetchWithRetry, FetchError } from "../utils/fetch.js";
 import { estimateRevenue, RevenueEstimate } from "./revenue-estimation.js";
 import { detectPriority, PriorityColor } from "./priority-detection.js";
+import { classifyCall, TaxonomyTags } from "./tag-classifier.js";
 
 const log = createModuleLogger("dashboard");
 
@@ -78,6 +79,8 @@ export interface DashboardJobPayload {
   equipment_age_bracket?: "under_10" | "10_to_15" | "over_15" | "unknown";
   is_decision_maker?: boolean;
   decision_maker_contact?: string;
+  // V6: HVAC Smart Tag Taxonomy (117 tags across 9 categories)
+  tags?: TaxonomyTags;
 }
 
 /**
@@ -234,6 +237,9 @@ export function transformToDashboardPayload(
   // Detect priority color for V4 dashboard
   const priority = detectPriority(state, retellData?.transcript, estimate);
 
+  // V6: Classify call with HVAC Smart Tag Taxonomy
+  const tags = classifyCall(state, retellData?.transcript);
+
   // For sales leads, create a descriptive title from equipment info
   const issueDescription = state.endCallReason === "sales_lead"
     ? buildSalesLeadTitle(state.equipmentType, state.equipmentAge)
@@ -291,6 +297,8 @@ export function transformToDashboardPayload(
     equipment_age_bracket: state.equipmentAgeBracket,
     is_decision_maker: state.isDecisionMaker,
     decision_maker_contact: state.decisionMakerContact,
+    // V6: HVAC Smart Tag Taxonomy
+    tags: tags,
   };
 }
 

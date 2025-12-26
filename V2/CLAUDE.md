@@ -120,6 +120,54 @@ Key fields sent to dashboard:
 - `revenue_tier_label`, `revenue_tier_signals` - Revenue classification
 - `priority_color`, `priority_reason` - V4 priority system
 - `caller_type`, `primary_intent`, `is_callback_complaint` - V3 triage fields
+- `sentiment_score`, `work_type` - V5 velocity enhancements
+- `tags` - V6 HVAC Smart Tag Taxonomy (see below)
+
+### V6 HVAC Smart Tag Taxonomy
+
+The backend classifies calls using a 117-tag taxonomy across 9 categories. Dashboard uses these tags for:
+- **Archetype determination**: HAZARD > RECOVERY > REVENUE > LOGISTICS
+- **Display tags**: Up to 4 prioritized tags shown on velocity cards
+- **Priority scoring**: Tag presence affects velocity queue order
+
+**Tag Categories:**
+
+| Category | Tags | Purpose |
+|----------|------|---------|
+| HAZARD | 7 | Safety-critical (gas leak, CO, electrical) |
+| URGENCY | 8 | Time-sensitivity (emergency, same-day, standard) |
+| SERVICE_TYPE | 23 | What the call is about (repair, maintenance, install) |
+| REVENUE | 9 | Sales opportunities (hot lead, financing, commercial) |
+| RECOVERY | 10 | Customer retention (callback risk, complaints) |
+| LOGISTICS | 20 | Access/authorization (gate code, landlord auth) |
+| CUSTOMER | 15 | Caller relationship (new, existing, commercial) |
+| NON_CUSTOMER | 12 | Non-customers (vendor, spam, wrong number) |
+| CONTEXT | 13 | Situational (seasonal, medical, post-storm) |
+
+**Webhook Payload Example:**
+
+```json
+{
+  "call_id": "call_xxx",
+  "customer_name": "John Smith",
+  "tags": {
+    "HAZARD": ["GAS_LEAK"],
+    "URGENCY": ["CRITICAL_EVACUATE"],
+    "SERVICE_TYPE": ["REPAIR_HEATING"],
+    "REVENUE": [],
+    "RECOVERY": [],
+    "LOGISTICS": ["GATE_CODE"],
+    "CUSTOMER": ["EXISTING_CUSTOMER"],
+    "NON_CUSTOMER": [],
+    "CONTEXT": ["PEAK_WINTER"]
+  }
+}
+```
+
+**Implementation Files:**
+- Full taxonomy reference: `V2/HVAC_SMART_TAG_TAXONOMY.md`
+- Implementation example: `V2/HVAC_TAXONOMY_IMPLEMENTATION_EXAMPLE.md`
+- Dashboard testing guide: `calllock-dashboard/HVAC_TAXONOMY_TESTING_GUIDE.md`
 
 ### Service Location
 
