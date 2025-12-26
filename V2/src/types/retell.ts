@@ -275,6 +275,12 @@ export interface ConversationState {
   equipmentAge?: string;             // "10 years old", "new last year"
   // Sales lead specific
   salesLeadNotes?: string;           // Additional context from sales inquiry
+  // HVAC Must-Have Fields (Owner-Operator Decision Support)
+  propertyType?: "house" | "condo" | "apartment" | "commercial";  // Property type for routing
+  systemStatus?: "completely_down" | "partially_working" | "running_but_ineffective";  // System working state
+  equipmentAgeBracket?: "under_10" | "10_to_15" | "over_15" | "unknown";  // Age bracket for revenue tier
+  isDecisionMaker?: boolean;         // Is caller authorized to approve work
+  decisionMakerContact?: string;     // Contact info if caller isn't decision maker
   appointmentBooked: boolean;
   appointmentId?: string;
   appointmentDateTime?: string;

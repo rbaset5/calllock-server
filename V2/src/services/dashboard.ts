@@ -72,6 +72,12 @@ export interface DashboardJobPayload {
   // V4 Priority color classification
   priority_color?: PriorityColor;
   priority_reason?: string;
+  // HVAC Must-Have Fields (Owner-Operator Decision Support)
+  property_type?: "house" | "condo" | "apartment" | "commercial";
+  system_status?: "completely_down" | "partially_working" | "running_but_ineffective";
+  equipment_age_bracket?: "under_10" | "10_to_15" | "over_15" | "unknown";
+  is_decision_maker?: boolean;
+  decision_maker_contact?: string;
 }
 
 /**
@@ -279,6 +285,12 @@ export function transformToDashboardPayload(
     // V4 Priority classification
     priority_color: priority.color,
     priority_reason: priority.reason,
+    // HVAC Must-Have Fields (Owner-Operator Decision Support)
+    property_type: state.propertyType,
+    system_status: state.systemStatus,
+    equipment_age_bracket: state.equipmentAgeBracket,
+    is_decision_maker: state.isDecisionMaker,
+    decision_maker_contact: state.decisionMakerContact,
   };
 }
 

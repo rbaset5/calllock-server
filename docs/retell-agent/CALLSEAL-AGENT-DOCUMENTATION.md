@@ -12,7 +12,8 @@ This documentation is split into multiple files for easier maintenance and itera
 | **Retell API Key** | `key_2d22013d18c09d647b1904f78f35` |
 | **Cal.com API Key** | `cal_live_d585326bede9414634a0938a3959c8bd` |
 | **Cal.com Event Type ID** | `3877847` |
-| **Webhook URL** | `https://calllock-dashboard-2.vercel.app/api/retell/customer-status` |
+| **Customer Status URL** | `https://calllock-dashboard-2.vercel.app/api/retell/customer-status` |
+| **Book Service URL** | `https://calllock-dashboard-2.vercel.app/api/retell/book-service` |
 | **Post-Call Webhook URL** | `https://calllock-server.onrender.com/webhook/retell/call-ended` |
 
 ## Documentation Files
@@ -151,25 +152,26 @@ If the customer interrupts you mid-sentence:
 - Never apologize for being interrupted - just roll with it: "Oh, Tuesday? Okay." not "I apologize, let's switch to Tuesday."
 
 ## CRITICAL: Booking Appointments
-To book appointments, you MUST follow the state flow:
-1. Transition to [calendar] state to check availability
-2. Transition to [booking] state to collect info and create booking
-3. Call the book_appointment_cal tool - verbal confirmation is NOT enough
-Never skip directly to SMS or call end without actually calling book_appointment_cal.
-The send_emergency_sms tool is ONLY for life safety emergencies - never use it for booking confirmations.
+To book appointments:
+1. Gather customer info (name, phone, address, issue)
+2. Ask when they'd like to come in
+3. Call book_service with their info and preferred time - it checks availability AND books in one step
+4. Confirm the booking using the date/time from the tool response
+
+NEVER say "you're booked" until book_service returns booked: true.
+The send_emergency_sms tool is ONLY for life safety emergencies.
 
 ## CRITICAL: State Machine Discipline
 You MUST follow the state machine flow. Do NOT call tools from other states.
 
 State-specific tool access:
-- State 4 (Service Area): NO tools - only confirm ZIP, then transition to [discovery]
+- State 4 (Service Area): NO tools - only confirm ZIP, then transition to [discovery] or [calendar]
 - State 5 (Discovery): NO tools - gather problem details, then transition to [calendar]
-- State 6 (Calendar): ONLY check_availability_cal - check slots, then transition to [booking]
-- State 7 (Booking): ONLY book_appointment_cal - create booking, then transition to [confirmation]
+- State 6 (Calendar): ONLY book_service - checks availability AND books in one step
+- State 7 (Booking): Recovery state - retry book_service if needed
 - State 10 (Existing Customer): ONLY get_customer_status - lookup appointments
 
 NEVER skip states. NEVER call a tool assigned to a different state.
-Even if the customer gives you all the info upfront, you must still transition through each state properly.
 The state machine ensures proper data collection and booking creation.
 ```
 
@@ -369,42 +371,59 @@ Do NOT get sidetracked - deliver the safety message.
 **Interruption Sensitivity:** 0.7
 **Tools:** None
 
+> **⚠️ CRITICAL FIX (Dec 19, 2025):** Added "fast path" edge for customers who want to book immediately without going through discovery. Also added explicit tool restrictions since Retell gives LLM access to ALL tools regardless of state. Agent was calling `check_availability_cal` directly from State 4, bypassing the entire state flow.
+
 **Prompt:**
 ```markdown
 ## Your Task
-Verify they're in our service area.
+Verify they're in our service area AND get property type.
 
-## IMPORTANT: Tool Restrictions
-You have NO tools in this state. Do NOT call:
-- check_availability_cal (that's for State 6)
-- book_appointment_cal (that's for State 7)
-- get_customer_status (that's for State 10)
-
-After confirming service area, you MUST transition to [discovery].
-
-## Ask
+## Step 1: Ask for ZIP
 "What's your ZIP code?"
 
-## After They Respond
-- If ZIP starts with 787: "Perfect, y'all are in our area." → Transition to [discovery]
-- If outside Austin: "Ah shoot, we just do Austin and the surrounding area - sorry we can't help ya out there!" → Transition to [end_call]
+## Step 2: If In Service Area, Ask Property Type
+- If ZIP starts with 787: "Perfect, y'all are in our area. Is this a house, condo, or commercial property?"
 
-## If Customer Already Described Problem
-Even if they've already told you what's wrong (e.g., "smelly air"), you still need to:
-1. Confirm service area first
-2. Then transition to [discovery] for proper intake
-3. In discovery, you can acknowledge what they said: "You mentioned smelly air - let me ask a couple quick questions..."
+## After Property Type Response
+Store: property_type: 'house' | 'condo' | 'apartment' | 'commercial'
+
+Then transition:
+- "Got it. So tell me what's going on with the system." → [discovery]
+
+## If Outside Austin
+"Ah shoot, we just do Austin and the surrounding area - sorry we can't help ya out there!"
+→ Transition to [end_call_state]
 
 ## Rules
 - Keep it quick
 - Don't repeat info back verbatim
-- ALWAYS transition to [discovery] after confirming valid ZIP - no exceptions
+- Commercial properties should get GREEN priority (high value)
+
+## Fast Path - Customer Already Knows What They Want
+If customer says they want to book right away (e.g., "quick booking", "soonest available", "just need an appointment"):
+After confirming ZIP AND property type, say "Perfect, let me check what we've got open..."
+→ Transition to [calendar] IMMEDIATELY (skip discovery)
+
+## ⚠️ TOOL RESTRICTIONS - CRITICAL
+You are in the SERVICE AREA state. The ONLY thing you can do here is verify ZIP code and property type.
+
+Do NOT call any tools in this state:
+- Do NOT call check_availability_cal (that's for State 6 - calendar)
+- Do NOT call book_appointment_cal (that's for State 7 - booking)
+- Do NOT call get_customer_status (that's for State 10)
+
+After verifying ZIP code, you MUST transition:
+- Normal flow: → [discovery] to ask diagnostic questions
+- Fast path (customer wants to book now): → [calendar] to check availability
+
+NEVER call calendar/booking tools without transitioning first.
 ```
 
 **Edges:**
 | Condition | Destination | Speak During Transition |
 |-----------|-------------|-------------------------|
-| ZIP starts with 787 (Austin metro) | `state_5_discovery` | **true** (agent asks discovery questions) |
+| ZIP starts with 787 AND customer wants to describe problem | `state_5_discovery` | **true** |
+| ZIP starts with 787 AND customer wants quick booking | `state_6_calendar` | **true** |
 | ZIP outside service area | `state_12_end_call_state` | false |
 
 ---
@@ -419,30 +438,39 @@ Even if they've already told you what's wrong (e.g., "smelly air"), you still ne
 **Prompt:**
 ```markdown
 ## Your Task
-Get the details for the tech. Ask ONE question at a time.
+Get the details for the tech. Ask ONE question at a time. These questions help the owner-operator decide whether to take the job and what to expect.
 
 ## Questions (vary your phrasing)
 1. "What's it doing?" or "Tell me what's happening"
-2. "How long's it been going on?"
-3. "Anything happen right before - storm, power outage, anything like that?"
+2. "Is the system completely off, or is it still running but not working right?"
+3. "How long's it been going on?"
+4. "Anything happen right before - storm, power outage, anything like that?"
+5. "Roughly how old is the system - under 10 years, 10 to 15, or older than 15?"
+
+## What You're Collecting (for dispatch decisions)
+- system_status: 'completely_down' | 'partially_working' | 'running_but_ineffective'
+- equipment_age_bracket: 'under_10' | '10_to_15' | 'over_15' | 'unknown'
 
 ## Acknowledgments (vary these between questions)
 - "I'll get that on the ticket"
 - "Making a note of that"
 - "Gotcha, let me jot that down"
 - "Right on"
+- "Noting that for the tech"
 
 ## Active Listening
 Instead of just saying "Okay," repeat the key detail with a downward inflection.
 - User: "It's making a grinding noise."
 - Agent: "Grinding noise... yikes. Okay."
+- User: "It's completely dead."
+- Agent: "Completely dead... got it. Okay."
 
 ## If They Volunteer Info Early
 If customer gives you details before you finish asking, just roll with it:
 - "Oh gotcha, so it's been a few days - making a note of that."
 Don't re-ask questions they've already answered.
 
-## After 2-3 Questions
+## After 4-5 Questions
 "Alright, I've got what I need for the tech. Let me check what we've got open..."
 Transition to [calendar]
 
@@ -478,131 +506,104 @@ NEVER skip the state transition.
 
 ### State 6: Calendar
 **Name:** `state_6_calendar`
-**Interruption Sensitivity:** 0.8 (HIGH - be responsive to early time selection)
-**Tools:** `check_availability_cal`
+**Interruption Sensitivity:** 0.8 (HIGH - be responsive to customer input)
+**Tools:** `book_service` (combined availability check + booking)
+
+> **⚠️ CRITICAL UPDATE (Dec 19, 2025):** Replaced separate `check_availability_cal` and `book_appointment_cal` tools with single `book_service` tool. This prevents the agent from "checking" availability without actually creating a booking.
 
 **Prompt:**
 ```markdown
 ## Your Task
-Check availability and offer times.
+Book the customer's appointment in ONE step. Before booking, confirm they can authorize the work.
 
-## Before Checking Availability
-Start with a filler to simulate looking at a screen:
-- "Let's see here... uh... looks like I've got..."
-- "Hmm... okay, pulling up the schedule..."
-- "Let me pull up my calendar real quick... one sec..."
-Say this BEFORE calling the check_availability_cal tool.
+## Step 1: Gather Quick Info
+If you don't already have it, ask:
+- "What name should I put this under?"
+- "And what's the service address?"
+- "When works best for you? We've got mornings and afternoons most days."
 
-## First
-Call check_availability_cal to check available slots.
+## Step 1.5: Decision-Maker Confirmation (CRITICAL)
+Right before calling book_service, ask:
+"And you're the homeowner who can approve the work, right?"
 
-## Offer Times
-"So I've got tomorrow morning around 9, or afternoon around 2 - either of those work?"
+**If YES:** Great, proceed to Step 2.
+Store: is_decision_maker: true
 
-For demo purposes, offer:
-- Tomorrow morning at 9 AM
-- Tomorrow afternoon at 2 PM
-- Day after tomorrow at 10 AM
+**If NO (tenant/property manager):**
+"No problem - who should we contact to authorize the repair if needed? What's their name and number?"
+Store: is_decision_maker: false
+Store: decision_maker_contact: "[name] [phone]"
+Then proceed to Step 2 (still book the appointment, but flag it).
 
-## If They Pick Before You Finish
-If customer picks a time before you list all options:
-- "Oh perfect, 9 works? Let me lock that in."
-Don't finish listing other times - they've already decided.
+## Step 2: Call book_service
+Once you have name, phone, address, preferred time, and issue description, IMMEDIATELY call book_service.
 
-## When User Picks a Time
-As soon as the user selects ANY time (examples: "9 works", "the earliest", "let's do tomorrow", "sounds good", "yeah", "sure"), IMMEDIATELY transition to [booking].
+Say: "Perfect, lemme check what we've got and lock you in..."
 
-Just say "Right on, let me get you booked" and transition to [booking].
+Then call book_service with ALL the info.
 
-## If Neither Works
-"What time's better for you? I can see what else we've got."
+## Step 3: Handle Response
 
-## If No Same-Day for Urgent
-"I don't have same-day, but I can have someone call you back within the hour to figure something out. Would that help?"
--> If yes: transition to [callback]
+**If booked: true**
+Say exactly what the tool returns in the message field, then:
+"Tech'll give you a call about 30 minutes before they head over."
+→ Transition to [confirmation]
 
-## ⚠️ TOOL RESTRICTIONS - CRITICAL
-You are in the CALENDAR state. You can ONLY call check_availability_cal.
+**If booked: false with alternatives**
+Offer the alternatives: "That slot's taken, but I've got [alternatives]. Any of those work?"
+When they pick one, call book_service again with the new preferred_time.
 
-Do NOT call:
-- book_appointment_cal (that's for State 7 - you MUST transition first)
-- get_customer_status (that's for State 10)
+**If booked: false with no alternatives**
+"I'm not finding any openings right now. Let me have someone call you back."
+→ Transition to [callback]
 
-When customer picks a time, say "Right on, let me get you booked" and transition to [booking].
-Do NOT try to book here. The booking happens in the NEXT state.
+## Rules
+- ALWAYS call book_service before confirming - verbal confirmation is NOT a booking
+- Use the exact date/time from the tool response
+- Don't say "you're booked" unless booked: true
+- Always ask about decision-maker status before booking
 ```
 
 **Edges:**
 | Condition | Destination | Speak During Transition |
 |-----------|-------------|-------------------------|
-| User selected time slot (any affirmative: "works", "sure", "yeah", "earliest") | `state_7_booking` | false |
-| User prefers callback | `state_9_callback` | **true** (agent confirms callback number) |
+| `book_service` returned booked: true | `state_8_confirmation` | false |
+| Booking failed or no availability - callback preferred | `state_9_callback` | **true** |
 
 ---
 
-### State 7: Booking
+### State 7: Booking (Recovery State)
 **Name:** `state_7_booking`
 **Interruption Sensitivity:** 0.7
-**Tools:** `book_appointment_cal` (ONLY - do not add other tools)
+**Tools:** `book_service` (same as State 6)
 
-> **⚠️ IMPORTANT:** Retell's multi-state agents give the LLM access to ALL tools across the agent, not just state-specific tools. The prompt must explicitly forbid using tools from other states.
-
-> **⚠️ CRITICAL FIX (Dec 19, 2025):** Updated prompt to call the booking tool IMMEDIATELY upon entering the state, with minimal info gathering. Previous prompts caused the agent to verbally confirm without actually creating the booking.
+> **⚠️ UPDATE (Dec 19, 2025):** State 7 is now a recovery/fallback state. Booking normally happens in State 6 using the combined `book_service` tool. State 7 is only reached if booking didn't complete in State 6.
 
 **Prompt:**
 ```markdown
-## ⚠️ MANDATORY FIRST ACTION
-When you enter this state, you MUST call book_appointment_cal IMMEDIATELY.
+## Recovery State
+You're in this state if booking didn't complete in the calendar state.
 
-You already have everything you need:
-- Customer phone: from caller ID or conversation
-- Time slot: the one they agreed to in calendar state
-- Address: ask quickly if you don't have it, or use "TBD"
-- Problem description: from discovery state
+If you have all the info, try calling book_service again:
+- customer_name
+- customer_phone
+- service_address
+- preferred_time
+- issue_description
 
-## Step 1: Quick Info Gather (if needed)
-If you don't have their name: "What name should I put this under?"
-If you don't have address: "And what's the service address?"
-Ask ONE question at a time. Keep it quick.
+If it still fails, say:
+"Hmm, the system's being a little finicky. Let me have someone call you back to get you scheduled."
+→ Transition to [callback]
 
-## Step 2: Call the Tool (REQUIRED)
-Say: "Perfect, lemme lock that in..."
-
-Then IMMEDIATELY call book_appointment_cal with:
-- attendee_name: Their name (or "Customer" if not given)
-- attendee_email: phone@placeholder.com
-- attendee_phone: Their phone number
-- start_time: The selected time in ISO format
-- meeting_location: Address or "TBD - will confirm"
-- description: The HVAC issue
-
-## After Tool Response
-- SUCCESS: "Alright, you're on the books for [day] at [time]. Tech'll call 30 minutes before. Anything else?"
-  → Transition to [confirmation]
-
-- FAILURE: "Hmm, system's being weird. Let me have someone call you back to confirm."
-  → Transition to [callback]
-
-## ⚠️ CRITICAL RULES
-1. You MUST call book_appointment_cal before confirming
-2. NEVER say "you're booked" until tool returns SUCCESS
-3. Verbal "yes" from customer ≠ booking created
-4. If you haven't called the tool yet, CALL IT NOW
-
-## Tool Restrictions
-The ONLY tool you can call is: book_appointment_cal
-
-Do NOT call:
-- get_customer_status (that's for State 10)
-- check_availability_cal (you already have the slot)
-- send_sms (emergencies only)
+If it succeeds (booked: true):
+→ Transition to [confirmation]
 ```
 
 **Edges:**
 | Condition | Destination | Speak During Transition |
 |-----------|-------------|-------------------------|
-| `book_appointment_cal` tool returned success (NOT verbal confirmation) | `state_8_confirmation` | false |
-| Booking failed or unavailable slots exhausted | `state_9_callback` | **true** (agent offers callback) |
+| `book_service` returned booked: true | `state_8_confirmation` | false |
+| Booking still failed | `state_9_callback` | **true** (agent offers callback) |
 
 ---
 
@@ -784,31 +785,63 @@ Call the end_call_final tool.
 
 ---
 
-### 2. Check Calendar Availability (Cal.com)
-**Type:** `book_appointment_cal` (check availability mode)
-**Assigned to:** State 6 (Calendar)
+### 2. Book Service (Combined Check + Book)
+**Type:** Custom webhook
+**Assigned to:** State 6 (Calendar), State 7 (Booking - recovery)
+
+> **⚠️ NEW (Dec 19, 2025):** Replaced separate `check_availability_cal` and `book_appointment_cal` with single combined `book_service` tool. This prevents the agent from "checking" without actually booking.
 
 | Field | Value |
 |-------|-------|
-| Name | `check_availability_cal` |
-| Description | Check technician availability when customer is ready to schedule a service appointment |
-| API Key | `cal_live_d585326bede9414634a0938a3959c8bd` |
-| Event Type ID | `3877847` |
-| Timezone | `America/Chicago` |
+| Name | `book_service` |
+| Description | Check availability and book appointment in one step. Returns confirmation or alternatives. |
+| Method | `POST` |
+| URL | `https://calllock-dashboard-2.vercel.app/api/retell/book-service` |
+| Timeout | `15000` ms |
+| Speak During Execution | ✅ Enabled |
 
----
+**Parameters JSON:**
+```json
+{
+  "type": "object",
+  "properties": {
+    "customer_name": { "type": "string", "description": "Customer's name" },
+    "customer_phone": { "type": "string", "description": "Customer's phone number from caller ID or conversation" },
+    "service_address": { "type": "string", "description": "Address for service call. Use 'TBD' if not provided." },
+    "preferred_time": { "type": "string", "description": "When customer wants appointment: 'Monday at 9am', 'tomorrow morning', 'soonest available'" },
+    "issue_description": { "type": "string", "description": "Brief description of the HVAC problem from discovery" }
+  },
+  "required": ["customer_name", "customer_phone", "preferred_time", "issue_description"]
+}
+```
 
-### 3. Book Appointment (Cal.com)
-**Type:** `book_appointment_cal`
-**Assigned to:** State 7 (Booking)
+**Response Format:**
+```json
+{
+  "success": true,
+  "booked": true,
+  "appointment_date": "Monday, December 22nd",
+  "appointment_time": "9:00 AM",
+  "message": "You're all set for Monday, December 22nd at 9:00 AM. Our tech will give you a call about 30 minutes before they head over."
+}
+```
 
-| Field | Value |
-|-------|-------|
-| Name | `book_appointment_cal` |
-| Description | Book HVAC service appointment after customer confirms their preferred time slot |
-| API Key | `cal_live_d585326bede9414634a0938a3959c8bd` |
-| Event Type ID | `3877847` |
-| Timezone | `America/Chicago` |
+Or if slot not available:
+```json
+{
+  "success": true,
+  "booked": false,
+  "available_slots": ["Monday, December 22nd at 2:00 PM", "Tuesday, December 23rd at 9:00 AM"],
+  "message": "That time's not available, but I've got Monday, December 22nd at 2:00 PM or Tuesday, December 23rd at 9:00 AM. Would either of those work?"
+}
+```
+
+**Natural Language Time Parsing:**
+The `preferred_time` parameter accepts natural language:
+- "soonest available" → First available slot in next 7 days
+- "tomorrow morning" → Tomorrow 6am-12pm
+- "Monday at 9" → Monday 9am slot
+- "next week" → Monday-Friday of next week
 
 ---
 
@@ -854,12 +887,69 @@ Each state that can end has its own end_call tool with a unique name:
 
 ---
 
-## Custom Webhook Endpoint
+## Custom Webhook Endpoints
 
-### File Location
+### 1. Book Service (Combined Availability + Booking)
+
+#### File Location
+`calllock-dashboard/src/app/api/retell/book-service/route.ts`
+
+#### Endpoint
+`POST https://calllock-dashboard-2.vercel.app/api/retell/book-service`
+
+#### Request Format (from Retell)
+```json
+{
+  "call": {
+    "call_id": "string",
+    "agent_id": "string",
+    "from_number": "string"
+  },
+  "args": {
+    "customer_name": "John Smith",
+    "customer_phone": "512-555-1234",
+    "service_address": "123 Main St, Austin TX",
+    "preferred_time": "Monday morning",
+    "issue_description": "AC not cooling"
+  }
+}
+```
+
+#### Response Format (Success)
+```json
+{
+  "success": true,
+  "booked": true,
+  "appointment_date": "Monday, December 22nd",
+  "appointment_time": "9:00 AM",
+  "message": "You're all set for Monday, December 22nd at 9:00 AM. Our tech will give you a call about 30 minutes before they head over."
+}
+```
+
+#### Response Format (Alternatives Available)
+```json
+{
+  "success": true,
+  "booked": false,
+  "available_slots": ["Monday, December 22nd at 2:00 PM", "Tuesday, December 23rd at 9:00 AM"],
+  "message": "That time's not available, but I've got Monday, December 22nd at 2:00 PM or Tuesday, December 23rd at 9:00 AM. Would either of those work?"
+}
+```
+
+#### Implementation
+- Parses natural language time preferences ("Monday 9am", "tomorrow morning", "soonest")
+- Calls Cal.com API to check availability
+- Books first available slot matching preference
+- Returns confirmation or alternatives for agent to offer
+
+---
+
+### 2. Customer Status (Appointment Lookup)
+
+#### File Location
 `calllock-dashboard/src/app/api/retell/customer-status/route.ts`
 
-### Endpoint
+#### Endpoint
 `POST https://calllock-dashboard-2.vercel.app/api/retell/customer-status`
 
 ### Request Format (from Retell)
@@ -1011,24 +1101,101 @@ Agent: "No worries! Have a good one."
 
 ### LLM Calls Wrong Tool (e.g., get_customer_status instead of book_appointment_cal)
 - **Symptom**: In State 7, logs show `get_customer_status` called instead of `book_appointment_cal`
-- **Root cause**: Retell multi-state agents give the LLM access to ALL tools across the entire agent, not just tools assigned to the current state. State tool assignment is a "suggestion" not a hard restriction.
-- **Solution**: State prompts must EXPLICITLY forbid calling tools from other states:
-  ```markdown
-  ## IMPORTANT: Tool Usage in This State
-  The ONLY tool you should call in this state is: book_appointment_cal
+- **Root cause**: Retell multi-state agents give the LLM access to ALL tools across the entire agent, not just tools assigned to the current state.
+- **IMPORTANT**: Prompt-based restrictions ("Do NOT call X") DO NOT WORK reliably. The LLM ignores them.
+- **Solution**: **ARCHITECTURAL FIX** - Move tools out of `general_tools` into state-specific `tools` arrays:
 
-  Do NOT call these tools - they are for different states:
-  - get_customer_status (that's for existing customer lookups in state 10)
-  - check_availability_cal (you already have the time slot from state 6)
-  - send_sms (that's for emergencies only)
+  **Before (broken):**
+  ```json
+  "general_tools": [
+    { "name": "end_call" },
+    { "name": "send_emergency_sms" },
+    { "name": "get_customer_status" }  // ← Available in ALL states!
+  ]
   ```
-- **Why it happens**: When agent asks for phone number in State 7 (to book), LLM may interpret this as "look up customer" and call `get_customer_status` instead of using the phone for `book_appointment_cal`
-- **Prevention**: Add explicit rule: "The customer gave you their phone to BOOK with, not to look up"
+
+  **After (fixed):**
+  ```json
+  "general_tools": [
+    { "name": "end_call" },
+    { "name": "send_emergency_sms" }
+  ]
+  // get_customer_status moved to State 10's tools array
+  ```
+
+- **Key Learning**: `general_tools` are available in ALL states. To restrict a tool to specific states, it MUST be in that state's `tools` array, NOT in `general_tools`.
+- **Why prompt restrictions fail**: The LLM optimizes for user experience over state machine discipline. If calling a tool helps the user faster, it will ignore "Do NOT call" instructions.
 
 ### Customer Name Shows "Unknown Caller"
 - **Root cause**: Customer info collected verbally but not stored in state
 - **Solution**: State 7 prompt now explicitly collects name, phone, and address before calling booking tool
 - The booking tool parameters include `attendee_name`, `attendee_phone`, etc.
+
+### Early-Exit Calls Not Creating Leads
+- **Symptom**: Call ends early (audio issues, customer says bye, agent misinterprets) and no lead/job appears in dashboard
+- **Root cause**: Agent called `end_call` without explicit reason, and dashboard webhook returned `null` for undefined `end_call_reason`, preventing lead creation
+- **Solution**: Dashboard webhook now treats undefined `end_call_reason` as `'abandoned'` status, ensuring early-exit calls become hot leads
+- **Location**: `calllock-dashboard/src/app/api/webhook/jobs/route.ts` - `mapEndCallReasonToLeadStatus()` function
+- **Result**: All calls that end without booking now appear as leads with "CALLBACK RISK" badge
+
+### Retell API Rejects Config: "Duplicate Destination State"
+- **Symptom**: API returns error `"Destination states must be unique for a particular state"`
+- **Root cause**: A state has multiple edges with the same `destination_state_name`
+- **Example**: State 5 had two edges both going to `state_6_calendar`
+- **Solution**: Merge conditions into a single edge with combined description
+- **Before (broken)**:
+  ```json
+  "edges": [
+    { "description": "Gathered details", "destination_state_name": "state_6_calendar" },
+    { "description": "Customer wants to skip", "destination_state_name": "state_6_calendar" }
+  ]
+  ```
+- **After (fixed)**:
+  ```json
+  "edges": [
+    { "description": "Ready to book - either gathered details OR customer wants to skip", "destination_state_name": "state_6_calendar" }
+  ]
+  ```
+
+### Agent Checks Availability But Never Books
+- **Symptom**: Agent says "I've got Monday at 9 AM" but never creates actual booking - customer thinks they're booked but no Cal.com appointment exists
+- **Root cause**: Separate `check_availability_cal` and `book_appointment_cal` tools allowed agent to check without booking
+- **Solution** (Dec 19, 2025): Replaced with single `book_service` tool that checks AND books in one step
+- **How it works**: Agent calls `book_service` with customer info + preferred time. Tool returns either `booked: true` with confirmation details, or `booked: false` with alternatives
+- **Verification**: Check call logs for `book_service` tool invocation and `booked: true` in response
+
+### Agent Config Updated But Live Calls Use Old Behavior
+- **Symptom**: You updated the LLM config via API, verified the new config is there, but live calls still use old tools/prompts
+- **Root cause 1**: Retell has a **publish/draft system**. Updating the LLM creates a new draft version, but live calls use the **last published version**
+- **Root cause 2**: Phone numbers can be **pinned to a specific version** and won't use newer versions even after publishing
+- **Verification**: Call logs show agent version (e.g., "Version: 3") while API shows higher version (e.g., "version": 5)
+- **Check published status**:
+  ```bash
+  curl -s -X GET "https://api.retellai.com/get-agent/{agent_id}" \
+    -H "Authorization: Bearer {api_key}" | jq '{version, is_published}'
+  ```
+  - `is_published: false` means current version is a draft
+  - The published version = current version - 1 (or the last version that was published)
+- **Solution Step 1**: Publish the agent to make current config active:
+  ```bash
+  curl -X POST "https://api.retellai.com/publish-agent/{agent_id}" \
+    -H "Authorization: Bearer {api_key}" \
+    -H "Content-Type: application/json"
+  ```
+- **Solution Step 2**: Check if phone number is pinned to old version:
+  ```bash
+  curl -s "https://api.retellai.com/list-phone-numbers" \
+    -H "Authorization: Bearer {api_key}" | jq '.[] | {phone_number, inbound_agent_version}'
+  ```
+- **Solution Step 3**: Update phone number to use new version:
+  ```bash
+  curl -X PATCH "https://api.retellai.com/update-phone-number/{phone_number}" \
+    -H "Authorization: Bearer {api_key}" \
+    -H "Content-Type: application/json" \
+    -d '{"inbound_agent_version": 4}'
+  ```
+- **After publishing**: Version increments by 1, previous version becomes the published/live version
+- **IMPORTANT**: After publishing AND updating phone number version, verify with a test call that logs show correct version
 
 ### Calls Getting Stuck
 - Check all states have at least one exit edge
@@ -1066,6 +1233,14 @@ curl -X PATCH "https://api.retellai.com/update-retell-llm/llm_2c8c46aa11a2e5a323
   -d '{"states": [...]}'
 ```
 
+**Publish Agent (REQUIRED for live calls to use new config):**
+```bash
+curl -X POST "https://api.retellai.com/publish-agent/agent_94ae0e7fdc51f791172e31b5f9" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json"
+```
+> **Note:** After updating LLM config, you MUST publish the agent for changes to take effect on live calls. Without publishing, calls use the last published version.
+
 ---
 
 ## Changelog
@@ -1100,3 +1275,26 @@ curl -X PATCH "https://api.retellai.com/update-retell-llm/llm_2c8c46aa11a2e5a323
 | 2025-12-19 | **FIX**: State 7 prompt now explicitly forbids calling tools from other states (get_customer_status, check_availability_cal, send_sms) |
 | 2025-12-19 | **FIX**: Removed `check_availability_cal` from State 7 tools - only `book_appointment_cal` should be assigned |
 | 2025-12-19 | **FIX**: Added rule clarifying phone number is for BOOKING, not for looking up existing appointments |
+| 2025-12-19 | **DISCOVERY**: Prompt-based tool restrictions don't work - LLM ignores "Do NOT call" instructions and calls tools anyway |
+| 2025-12-19 | **ARCHITECTURAL FIX**: Moved `get_customer_status` from `general_tools` to State 10's `tools` array - enforces tool scope at Retell level, not just prompt level |
+| 2025-12-19 | **LEARNING**: `general_tools` are available in ALL states. To restrict a tool to specific states, it MUST be in that state's `tools` array, not `general_tools` |
+| 2025-12-19 | **FIX**: Merged duplicate State 5 edges to `state_6_calendar` - Retell requires unique destination states per edge |
+| 2025-12-19 | **FIX**: Dashboard webhook now creates leads for calls without explicit `end_call_reason` - treats as 'abandoned' to capture early-exit calls (audio issues, customer says bye early) |
+| 2025-12-19 | **LEARNING**: Calls ending without explicit reason (agent_hangup without booking) previously created neither lead nor job - they vanished from the system |
+| 2025-12-19 | **ARCHITECTURAL FIX**: Replaced separate `check_availability_cal` + `book_appointment_cal` tools with single combined `book_service` tool |
+| 2025-12-19 | **WHY**: Agent was calling availability check but never booking tool - verbally confirming bookings that didn't exist |
+| 2025-12-19 | **NEW ENDPOINT**: Created `/api/retell/book-service` - accepts natural language time ("Monday 9am", "soonest"), checks Cal.com availability, and books in one step |
+| 2025-12-19 | **STATE CHANGES**: State 6 now handles booking directly. State 7 is now a recovery/fallback state for retrying failed bookings |
+| 2025-12-19 | **CRITICAL FIX**: Agent was not published - live calls were using old Version 3 config with `check_availability_cal` instead of new `book_service` tool |
+| 2025-12-19 | **LEARNING**: Retell uses the **last published version** for live calls. Updating LLM config creates a draft - must explicitly publish via `POST /publish-agent/{agent_id}` |
+| 2025-12-19 | Published agent Version 4 → Version 5 (new draft), making `book_service` active for live calls |
+| 2025-12-19 | **CRITICAL FIX**: Phone number `+13126463816` was pinned to Version 3 (`inbound_agent_version: 3`) - calls still used old config even after publishing |
+| 2025-12-19 | **LEARNING**: Retell phone numbers have `inbound_agent_version` field that OVERRIDES the default published version. Must update via `PATCH /update-phone-number/{number}` |
+| 2025-12-19 | Updated phone number to use Version 4: `{"inbound_agent_version": 4}` - now live calls will use `book_service` tool |
+| 2025-12-19 | **VERIFIED**: Test Call 12 (`call_b3c3c2305b9a4a0d9cc69a47812`) confirmed fix - agent used Version 4, called `book_service` tool, and created real Cal.com booking |
+| 2025-12-19 | **SUCCESS**: Agent correctly offered alternative when Monday 6 AM unavailable → booked Sunday 9 AM instead, confirmed with actual date/time from tool response |
+| 2025-12-19 | **SUMMARY**: Two-step version update required: (1) Publish agent to create new version, (2) Update phone number `inbound_agent_version` to route calls to new version |
+| 2025-12-19 | **BUG**: Cal.com bookings created by `book_service` were not appearing in dashboard BOOKED tab - job was never inserted into Supabase |
+| 2025-12-19 | **ROOT CAUSE**: `book_service` endpoint created Cal.com booking but didn't insert Job into Supabase. Old flow relied on V2 backend setting `state.appointmentDateTime` and sending to dashboard webhook |
+| 2025-12-19 | **FIX**: Updated `book_service` to insert Job directly into Supabase after successful Cal.com booking. Uses `DASHBOARD_USER_EMAIL` env var to find user, includes deduplication via `original_call_id` |
+| 2025-12-19 | **DATA FLOW NOW**: Agent → `book_service` → (1) Creates Cal.com booking (2) Inserts Job into Supabase → Job appears in BOOKED tab |
