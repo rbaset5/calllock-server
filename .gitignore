@@ -30,3 +30,6 @@ coverage/
 # Temporary files
 tmp/
 temp/
+
+# Symlinked projects (separate git repos)
+calllock-dashboard
