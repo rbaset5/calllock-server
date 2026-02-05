@@ -24,9 +24,11 @@ CallLock is a Done-For-You missed call recovery service for trades businesses (H
 | `voice-agent/` | **Voice AI agent configs, optimization logs, tests** | Retell AI |
 | `docs/` | Documentation and agent configurations | - |
 
-> **Note:** The dashboard is a separate git repository located at `../calllock-dashboard/` (sibling directory). A symlink exists here for backward compatibility. To work on the dashboard, you can either:
-> - Use the symlink: `cd calllock-dashboard`
-> - Or go directly: `cd ../calllock-dashboard` (or `cd /Users/rashidbaset/Documents/calllock-dashboard`)
+> **Note:** The dashboard is a **separate git repository** at `https://github.com/rbaset5/calllock-dashboard`.
+> - **Location:** `../calllock-dashboard/` (sibling directory)
+> - **Symlink:** `calllock-dashboard/` in this directory points to it
+> - **If missing:** See "First-Time Setup" below to clone and configure it
+> - **Requires:** `.env.local` with Supabase credentials (not committed to git)
 
 ---
 
@@ -121,6 +123,32 @@ SUPABASE_SERVICE_ROLE_KEY=<supabase-service-key>
 ```
 
 ## Quick Start
+
+### First-Time Setup (Dashboard)
+
+The dashboard is a **separate git repository**. If not already cloned:
+
+```bash
+# Clone dashboard as sibling directory
+cd /path/to/retellai-calllock
+git clone https://github.com/rbaset5/calllock-dashboard
+
+# Create symlink for convenience (from nashville directory)
+cd nashville
+ln -s ../calllock-dashboard calllock-dashboard
+```
+
+**Required: Create `.env.local`** in the dashboard directory:
+
+```bash
+# calllock-dashboard/.env.local
+NEXT_PUBLIC_SUPABASE_URL=https://xboybmqtwsxmdokgzclk.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<get from Supabase dashboard: Settings > API > anon public>
+SUPABASE_SERVICE_ROLE_KEY=<get from Supabase dashboard: Settings > API > service_role>
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+Get Supabase keys from: https://supabase.com/dashboard/project/xboybmqtwsxmdokgzclk/settings/api-keys
 
 ### Local Development
 
