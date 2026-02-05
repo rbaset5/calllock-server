@@ -20,15 +20,16 @@ CallLock is a Done-For-You missed call recovery service for trades businesses (H
 |-----------|-------------|------------|
 | `V2/` | Backend webhook server (Express/Node.js) | Render: calllock-server.onrender.com |
 | `V3/` | V3 backend with triage engine (experimental) | - |
-| `calllock-dashboard/` | **Symlink** → `../calllock-dashboard/` (separate git repo) | Vercel: calllock-dashboard-2.vercel.app |
+| `calllock-dashboard/` | **Symlink** → `/Users/rashidbaset/calllock-dashboard` (separate git repo) | Vercel: calllock-dashboard-2.vercel.app |
 | `voice-agent/` | **Voice AI agent configs, optimization logs, tests** | Retell AI |
 | `docs/` | Documentation and agent configurations | - |
 
 > **Note:** The dashboard is a **separate git repository** at `https://github.com/rbaset5/calllock-dashboard`.
-> - **Location:** `../calllock-dashboard/` (sibling directory)
+> - **Canonical Location:** `/Users/rashidbaset/calllock-dashboard` (THE single source of truth)
 > - **Symlink:** `calllock-dashboard/` in this directory points to it
 > - **If missing:** See "First-Time Setup" below to clone and configure it
 > - **Requires:** `.env.local` with Supabase credentials (not committed to git)
+> - **⚠️ DO NOT use** `/Users/rashidbaset/calllockv2/dashboard` - that is an archived old copy
 
 ---
 
@@ -126,17 +127,19 @@ SUPABASE_SERVICE_ROLE_KEY=<supabase-service-key>
 
 ### First-Time Setup (Dashboard)
 
-The dashboard is a **separate git repository**. If not already cloned:
+The dashboard is a **separate git repository**. Clone to the canonical location:
 
 ```bash
-# Clone dashboard as sibling directory
-cd /path/to/retellai-calllock
+# Clone dashboard to canonical location
+cd /Users/rashidbaset
 git clone https://github.com/rbaset5/calllock-dashboard
 
-# Create symlink for convenience (from nashville directory)
-cd nashville
-ln -s ../calllock-dashboard calllock-dashboard
+# Create symlink from nashville directory
+cd /Users/rashidbaset/conductor/workspaces/retellai-calllock/nashville
+ln -s /Users/rashidbaset/calllock-dashboard calllock-dashboard
 ```
+
+**⚠️ IMPORTANT:** Always use `/Users/rashidbaset/calllock-dashboard` - do NOT use any other paths.
 
 **Required: Create `.env.local`** in the dashboard directory:
 
