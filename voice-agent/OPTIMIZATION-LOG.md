@@ -88,3 +88,26 @@ States unchanged: safety, urgency, pre_confirm, confirm.
 
 ### Result
 Published as Version 22. Phone bound to v23. Config: retell-llm-v7-ux-refined.json.
+
+## 2026-02-07 — Echo/Self-Hearing Mitigation (Audio Tuning)
+
+### Problem
+Test call (call_aa8dfb8966ac09af0045e7b4ed5) revealed the agent heard its own greeting as caller speech. STT transcribed the agent's "Thanks for calling" as user input, causing the agent to respond to itself ("Sure thing. Are you calling about HVAC service today?"). Caller (who said nothing) heard nonsense and hung up. Root cause: echo cancellation failure at the telephony layer, amplified by overly aggressive interruption sensitivity (0.8) and maximum responsiveness (1.0).
+
+### Change
+Reduced audio sensitivity settings to give echo cancellation more time to filter:
+
+**Agent-level:**
+- `interruption_sensitivity`: 0.8 → 0.5
+- `responsiveness`: 1.0 → 0.7
+- `backchannel_frequency`: 0.8 → 0.6
+
+**LLM state-level interruption_sensitivity:**
+- `welcome`: 0.8 → 0.4 (most critical — echo happens during greeting)
+- `follow_up`, `manage_booking`, `service_area`, `discovery`, `urgency`, `pre_confirm`: 0.8 → 0.6
+- `lookup`: 0.6 → 0.5
+- `booking`, `confirm`: 0.7 → 0.6
+- `safety`: 0.3 → 0.3 (unchanged)
+
+### Result
+Published as Version 29. Phone bound to v30. Pending test call to verify echo no longer triggers.

@@ -84,7 +84,12 @@ app.use(
 );
 
 // Request size limits (increased for Retell post-call webhooks with transcripts)
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({
+  limit: "1mb",
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf.toString("utf8");
+  },
+}));
 
 // Rate limiting for API endpoints
 const apiLimiter = rateLimit({

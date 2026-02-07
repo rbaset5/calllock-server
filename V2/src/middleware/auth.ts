@@ -64,11 +64,11 @@ export function retellWebhookAuth(req: Request, res: Response, next: NextFunctio
 
   // Use Retell SDK's verify function (handles v=<timestamp>,d=<hmac> format)
   try {
-    const body = JSON.stringify(req.body);
+    const body = (req as any).rawBody || JSON.stringify(req.body);
     const isValid = Retell.verify(body, retellApiKey, signature);
 
     if (!isValid) {
-      log.warn({ path: req.path }, "Invalid Retell signature");
+      log.warn({ path: req.path, bodyLen: body.length, hasRawBody: !!(req as any).rawBody }, "Invalid Retell signature");
       return res.status(401).json({ error: "Unauthorized: Invalid signature" });
     }
 

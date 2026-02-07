@@ -4,11 +4,13 @@
 - Previous: v7-ux-refined (8-state)
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
-- Retell Phone Number Version: 23 (bound to +13126463816)
-- Retell Published Version: 22
+- Retell Phone Number Version: 30 (bound to +13126463816)
+- Retell Published Version: 29
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: DRAFT — not yet deployed
-- Backchannel: Enabled (platform-level active listening sounds)
+- Deployment status: LIVE — deployed Feb 7 2026
+- Backchannel: Enabled (frequency 0.6)
+- Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
+- Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
 - Config file: retell-llm-v8-returning-callers.json
 
