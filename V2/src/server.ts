@@ -756,6 +756,180 @@ app.post("/webhook/retell/send_sales_lead_alert", async (req: Request, res: Resp
   }
 });
 /**
+ * Lookup caller - automatic caller recognition at call start
+ * Uses caller ID from Retell call metadata to look up history
+ * Returns enriched data including address, ZIP, and callback promises
+ */
+app.post("/webhook/retell/lookup_caller", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call } = req.body as RetellFunctionWebhook;
+    const state = await getOrCreateWebhookState(call);
+
+    // Use caller ID directly — no args needed
+    const phone = state.customerPhone;
+
+    if (!phone) {
+      return res.json({
+        found: false,
+        message: "No caller ID available. Let me get your information.",
+      });
+    }
+
+    logger.info({ callId: state.callId, phone: maskPhone(phone) }, "lookup_caller called");
+
+    const result = await getCustomerHistory(phone);
+
+    // Update state with customer info if found
+    if (result.customerName && !state.customerName) {
+      state.customerName = result.customerName;
+    }
+    if (result.found) {
+      await saveCallSession(state);
+    }
+
+    logger.info(
+      {
+        callId: state.callId,
+        found: result.found,
+        hasAppointment: Boolean(result.upcomingAppointment),
+        hasAddress: Boolean(result.address),
+        hasCallbackPromise: Boolean(result.callbackPromise),
+        latencyMs: Date.now() - startTime,
+      },
+      "lookup_caller completed"
+    );
+
+    return res.json(result);
+  } catch (error) {
+    logger.error({ error }, "lookup_caller failed");
+    // Graceful fallback — don't block the call if lookup fails
+    return res.json({
+      found: false,
+      message: "I wasn't able to pull up the account — no problem, I can help you from scratch.",
+    });
+  }
+});
+
+/**
+ * Manage appointment - reschedule, cancel, or check status of existing booking
+ * Used by the manage_booking state for returning callers
+ */
+app.post("/webhook/retell/manage_appointment", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const state = await getOrCreateWebhookState(call);
+
+    const action = args.action as string;
+    // Use booking_uid from args, or from state (set by lookup_booking/lookup_caller)
+    const bookingUid = (args.booking_uid as string) || state.appointmentId;
+
+    logger.info({ callId: state.callId, action, bookingUid }, "manage_appointment called");
+
+    if (!action) {
+      return res.json({
+        success: false,
+        message: "I need to know what you'd like to do — reschedule, cancel, or check on the appointment.",
+      });
+    }
+
+    if (action === "status") {
+      // Status check — look up the appointment details
+      if (!bookingUid) {
+        return res.json({
+          success: true,
+          action_taken: "status",
+          message: "I don't have a booking on file to check. Would you like to schedule a new appointment?",
+        });
+      }
+      const lookup = await lookupBookingByPhone(state.customerPhone || "");
+      if (lookup.found && lookup.booking) {
+        return res.json({
+          success: true,
+          action_taken: "status",
+          message: `Your appointment is still on for ${lookup.booking.date} at ${lookup.booking.time}. The tech will call about 30 minutes before heading over.`,
+        });
+      }
+      return res.json({
+        success: true,
+        action_taken: "status",
+        message: "I'm not finding an active appointment on file. Would you like to set one up?",
+      });
+    }
+
+    if (action === "cancel") {
+      if (!bookingUid) {
+        return res.json({
+          success: false,
+          message: "I don't have a booking on file to cancel.",
+        });
+      }
+      const reason = (args.reason as string) || "Cancelled via phone";
+      const result = await cancelBooking(bookingUid, reason);
+
+      if (result.success) {
+        state.appointmentBooked = false;
+        state.appointmentId = undefined;
+        await saveCallSession(state);
+      }
+
+      logger.info({ callId: state.callId, success: result.success, latencyMs: Date.now() - startTime }, "manage_appointment cancel completed");
+      return res.json({
+        success: result.success,
+        action_taken: "cancel",
+        message: result.success
+          ? "Done — your appointment's been cancelled. Call us back anytime if you need to reschedule."
+          : "I wasn't able to cancel that on my end. Let me have someone call you back to take care of it.",
+      });
+    }
+
+    if (action === "reschedule") {
+      if (!bookingUid) {
+        return res.json({
+          success: false,
+          message: "I don't have a booking on file to reschedule.",
+        });
+      }
+      const newTime = args.new_time as string;
+      if (!newTime) {
+        return res.json({
+          success: false,
+          message: "When would you like to reschedule to?",
+        });
+      }
+
+      const result = await rescheduleBooking(bookingUid, newTime);
+
+      if (result.success) {
+        state.appointmentDateTime = newTime;
+        await saveCallSession(state);
+      }
+
+      logger.info({ callId: state.callId, success: result.success, latencyMs: Date.now() - startTime }, "manage_appointment reschedule completed");
+      return res.json({
+        success: result.success,
+        action_taken: "reschedule",
+        message: result.success
+          ? result.message || "Your appointment's been moved. Tech will call 30 minutes before heading over."
+          : result.message || "That time didn't work out. Want to try another time?",
+      });
+    }
+
+    return res.json({
+      success: false,
+      message: "I can reschedule, cancel, or check on an appointment. Which would you like?",
+    });
+  } catch (error) {
+    logger.error({ error }, "manage_appointment failed");
+    return res.json({
+      success: false,
+      message: "I'm having trouble updating that right now. Want me to have someone call you back?",
+    });
+  }
+});
+
+/**
  * Get customer status/history - allows customers to ask "what's my status?"
  */
 app.post("/webhook/retell/get_customer_status", async (req: Request, res: Response) => {

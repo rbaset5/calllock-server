@@ -71,11 +71,14 @@ interface CustomerNoteRecord {
 export interface CustomerHistoryResult {
   found: boolean;
   customerName?: string;
+  address?: string; // Most recent service address from booking history
+  zipCode?: string; // ZIP code extracted from address or booking history
   operatorNotes: string[]; // Active notes from operator to read to customer
   upcomingAppointment?: {
     date: string;
     time: string;
     issue?: string;
+    jobId?: string; // For manage_appointment actions
   };
   recentCalls: {
     date: string;
@@ -87,6 +90,11 @@ export interface CustomerHistoryResult {
     issue?: string;
     status: string;
   }[];
+  callbackPromise?: {
+    date: string;
+    issue?: string;
+    promisedBy?: string;
+  };
   urgentAlert?: {
     date: string;
     description: string;
@@ -243,6 +251,12 @@ function buildSummaryMessage(result: CustomerHistoryResult): string {
     }
   }
 
+  // Callback promise (if any)
+  if (result.callbackPromise) {
+    const issuePart = result.callbackPromise.issue ? ` about ${result.callbackPromise.issue}` : "";
+    parts.push(`You called ${result.callbackPromise.date}${issuePart} and were told someone would call back.`);
+  }
+
   // Urgent alert (if any)
   if (result.urgentAlert) {
     parts.push(
@@ -273,6 +287,7 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
     recentCalls: [],
     pastAppointments: [],
     message: "",
+    // address, zipCode, callbackPromise populated below if found
   };
 
   // 1. Check for active operator notes (highest priority)
@@ -313,6 +328,21 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
       issue: call.hvac_issue_type,
       outcome: call.outcome,
     }));
+
+    // Detect unfulfilled callback promises (callback_later outcome within last 3 days)
+    const recentCallback = calls.find((call) => {
+      if (call.outcome !== "callback_later") return false;
+      const callDate = new Date(call.started_at);
+      const daysSince = (Date.now() - callDate.getTime()) / (1000 * 60 * 60 * 24);
+      return daysSince < 3;
+    });
+
+    if (recentCallback) {
+      result.callbackPromise = {
+        date: formatRelativeTime(recentCallback.started_at),
+        issue: recentCallback.hvac_issue_type,
+      };
+    }
   }
 
   // 3. Get bookings from Supabase (past and upcoming)
@@ -329,6 +359,17 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
       result.customerName = bookings[0].customer_name;
     }
 
+    // Extract address from most recent booking with an address
+    const bookingWithAddress = bookings.find((b) => b.address && b.address !== "TBD");
+    if (bookingWithAddress) {
+      result.address = bookingWithAddress.address;
+      // Extract ZIP code from address (5-digit pattern at end)
+      const zipMatch = bookingWithAddress.address.match(/\b(\d{5})(?:-\d{4})?\b/);
+      if (zipMatch) {
+        result.zipCode = zipMatch[1];
+      }
+    }
+
     // If we have an upcoming appointment from Cal.com, add the issue from booking
     if (result.upcomingAppointment && bookings[0].problem_description) {
       const upcomingBooking = bookings.find(
@@ -336,6 +377,21 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
       );
       if (upcomingBooking) {
         result.upcomingAppointment.issue = upcomingBooking.problem_description;
+      }
+    }
+
+    // Check for upcoming appointments in Supabase bookings (supplement Cal.com)
+    if (!result.upcomingAppointment) {
+      const upcomingBooking = bookings.find(
+        (b) => new Date(b.scheduled_time) > new Date()
+      );
+      if (upcomingBooking) {
+        result.upcomingAppointment = {
+          date: formatDate(upcomingBooking.scheduled_time),
+          time: formatTime(upcomingBooking.scheduled_time),
+          issue: upcomingBooking.problem_description,
+          jobId: upcomingBooking.call_id, // Use call_id as reference for job lookup
+        };
       }
     }
 
@@ -379,6 +435,8 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
       phone: maskPhone(phone),
       found: result.found,
       hasAppointment: Boolean(result.upcomingAppointment),
+      hasAddress: Boolean(result.address),
+      hasCallbackPromise: Boolean(result.callbackPromise),
       callCount: result.recentCalls.length,
       notesCount: result.operatorNotes.length,
     },
