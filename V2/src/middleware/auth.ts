@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
+import Retell from "retell-sdk";
 import { createModuleLogger } from "../utils/logger.js";
 
 const log = createModuleLogger("auth");
@@ -61,15 +62,10 @@ export function retellWebhookAuth(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: "Unauthorized: Missing signature" });
   }
 
-  // Retell uses the API key to sign the request body
+  // Use Retell SDK's verify function (handles v=<timestamp>,d=<hmac> format)
   try {
     const body = JSON.stringify(req.body);
-    const expectedSignature = crypto
-      .createHmac("sha256", retellApiKey)
-      .update(body)
-      .digest("hex");
-
-    const isValid = timingSafeEqual(signature, expectedSignature);
+    const isValid = Retell.verify(body, retellApiKey, signature);
 
     if (!isValid) {
       log.warn({ path: req.path }, "Invalid Retell signature");
