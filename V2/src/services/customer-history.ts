@@ -147,6 +147,8 @@ async function supabaseQuery<T>(
   }
 }
 
+const SERVICE_TIMEZONE = "America/Chicago"; // Austin, TX is Central Time
+
 /**
  * Format a date for human reading
  */
@@ -156,6 +158,7 @@ function formatDate(isoString: string): string {
     weekday: "long",
     month: "long",
     day: "numeric",
+    timeZone: SERVICE_TIMEZONE,
   });
 }
 
@@ -168,6 +171,7 @@ function formatTime(isoString: string): string {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
+    timeZone: SERVICE_TIMEZONE,
   });
 }
 
