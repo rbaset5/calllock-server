@@ -9,6 +9,7 @@ import { fetchWithRetry, FetchError } from "../utils/fetch.js";
 const log = createModuleLogger("calcom");
 
 const CAL_COM_API_KEY = process.env.CAL_COM_API_KEY;
+const SERVICE_TIMEZONE = "America/Chicago"; // Austin, TX is Central Time
 const CAL_API_BASE = "https://api.cal.com/v2";
 
 interface CalBooking {
@@ -106,15 +107,17 @@ export async function lookupBookingByPhone(phone: string): Promise<LookupResult>
             weekday: "long",
             month: "long",
             day: "numeric",
+            timeZone: SERVICE_TIMEZONE,
           }),
           time: startDate.toLocaleTimeString("en-US", {
             hour: "numeric",
             minute: "2-digit",
             hour12: true,
+            timeZone: SERVICE_TIMEZONE,
           }),
           status: matchingBooking.status,
         },
-        message: `Found appointment for ${startDate.toLocaleDateString()}`,
+        message: `Found appointment for ${startDate.toLocaleDateString("en-US", { timeZone: SERVICE_TIMEZONE })}`,
       };
     }
 
@@ -227,11 +230,13 @@ export async function rescheduleBooking(
       weekday: "long",
       month: "long",
       day: "numeric",
+      timeZone: SERVICE_TIMEZONE,
     });
     const formattedTime = newDate.toLocaleTimeString("en-US", {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
+      timeZone: SERVICE_TIMEZONE,
     });
 
     log.info({ bookingUid, newStartTime }, "Booking rescheduled successfully");
