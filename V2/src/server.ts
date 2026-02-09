@@ -346,7 +346,7 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       conversationState = extractStateFromPostCallData(payload.call);
     } else if (!conversationState.endCallReason && payload.call.disconnection_reason) {
       // We have a saved session but no explicit end call reason was set
-      // This means the AI didn't call endCall - customer likely hung up
+      // This means the AI didn't call endCall webhook (end_call is a built-in Retell tool)
       const mappedReason = mapDisconnectionReason(payload.call.disconnection_reason);
       if (mappedReason) {
         logger.info(
@@ -354,6 +354,15 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
           "Setting end call reason from disconnection_reason"
         );
         conversationState.endCallReason = mappedReason;
+      } else if (payload.call.disconnection_reason === "agent_hangup") {
+        // Agent hung up without setting explicit reason via webhook
+        // (end_call is a built-in Retell tool that doesn't fire webhooks)
+        // Match the fallback logic from extractStateFromPostCallData()
+        conversationState.endCallReason = conversationState.appointmentBooked ? "completed" : "callback_later";
+        logger.info(
+          { callId, endCallReason: conversationState.endCallReason, appointmentBooked: conversationState.appointmentBooked },
+          "Setting end call reason from agent_hangup fallback"
+        );
       }
     }
 
@@ -981,6 +990,57 @@ app.post("/webhook/retell/get_customer_status", async (req: Request, res: Respon
   } catch (error) {
     logger.error({ error }, "get_customer_status failed");
     return res.status(500).json({ error: "Tool execution failed" });
+  }
+});
+
+/**
+ * Create callback request - used by follow_up and urgency states
+ * Records a callback request and sends immediate SMS notification
+ */
+app.post("/webhook/retell/create_callback", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { call, args } = req.body as RetellFunctionWebhook;
+    const state = await getOrCreateWebhookState(call);
+
+    const reason = (args.reason as string) || "Customer requested callback";
+    const urgency = (args.urgency as string) || "normal";
+
+    logger.info({ callId: state.callId, reason, urgency }, "create_callback called");
+
+    // Update state with callback request
+    state.endCallReason = "callback_later";
+    if (args.customer_name) state.customerName = args.customer_name as string;
+    if (args.issue_description) state.problemDescription = args.issue_description as string;
+
+    await saveCallSession(state);
+
+    // Send immediate SMS notification to business owner
+    try {
+      await sendEmergencyAlert({
+        urgencyDescription: `Callback requested: ${reason}`,
+        callerPhone: state.customerPhone || "Unknown",
+        address: state.serviceAddress || "Not provided",
+        callbackMinutes: urgency === "urgent" ? 30 : 60,
+      });
+      logger.info({ callId: state.callId }, "Callback SMS notification sent");
+    } catch (smsError) {
+      logger.warn({ callId: state.callId, error: smsError }, "Callback SMS failed (non-fatal)");
+    }
+
+    logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "create_callback completed");
+    return res.json({
+      success: true,
+      message: urgency === "urgent"
+        ? "Done — I've flagged this as urgent. Someone will call you back within 30 minutes."
+        : "Done — someone from the team will call you back within the hour.",
+    });
+  } catch (error) {
+    logger.error({ error }, "create_callback failed");
+    return res.json({
+      success: false,
+      message: "I'll make sure someone calls you back today.",
+    });
   }
 });
 

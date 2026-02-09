@@ -24,6 +24,7 @@ interface CallRecord {
   ended_at?: string;
   outcome?: string;
   hvac_issue_type?: string;
+  problem_description?: string;
   urgency_tier?: string;
 }
 
@@ -326,14 +327,14 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
   // 2. Get recent calls from Supabase
   const calls = await supabaseQuery<CallRecord>(
     "calls",
-    `phone_number=eq.${encodeURIComponent(normalizedPhone)}&order=started_at.desc&limit=5`
+    `phone_number=eq.${encodeURIComponent(normalizedPhone)}&select=call_id,phone_number,started_at,ended_at,outcome,hvac_issue_type,problem_description,urgency_tier&order=started_at.desc&limit=5`
   );
 
   if (calls && calls.length > 0) {
     result.found = true;
     result.recentCalls = calls.map((call) => ({
       date: formatRelativeTime(call.started_at),
-      issue: call.hvac_issue_type,
+      issue: call.hvac_issue_type || call.problem_description || undefined,
       outcome: call.outcome,
     }));
 
@@ -348,7 +349,7 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
     if (recentCallback) {
       result.callbackPromise = {
         date: formatRelativeTime(recentCallback.started_at),
-        issue: recentCallback.hvac_issue_type,
+        issue: recentCallback.hvac_issue_type || recentCallback.problem_description || undefined,
       };
     }
   }
