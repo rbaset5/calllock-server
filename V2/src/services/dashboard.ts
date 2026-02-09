@@ -255,7 +255,9 @@ export function transformToDashboardPayload(
 
   return {
     customer_name: state.customerName || "Unknown Caller",
-    customer_phone: state.customerPhone || phoneFromRetell || "Unknown",
+    customer_phone: (state.customerPhone && state.customerPhone !== "auto" && state.customerPhone !== "TBD")
+      ? state.customerPhone
+      : phoneFromRetell || "Unknown",
     customer_address: state.serviceAddress || "Not provided",
     service_type: "hvac", // Always HVAC for this system
     urgency: mapUrgencyToDashboard(state.urgencyTier, state.endCallReason),
@@ -443,7 +445,9 @@ export async function sendCallToDashboard(
   const payload: DashboardCallPayload = {
     call_id: state.callId,
     retell_call_id: retellData?.call_id,
-    phone_number: state.customerPhone || callPhoneFromRetell || "Unknown",
+    phone_number: (state.customerPhone && state.customerPhone !== "auto" && state.customerPhone !== "TBD")
+      ? state.customerPhone
+      : callPhoneFromRetell || "Unknown",
     customer_name: state.customerName,
     started_at: retellData?.start_timestamp
       ? new Date(retellData.start_timestamp).toISOString()
