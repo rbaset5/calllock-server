@@ -1,20 +1,61 @@
 # AGENT STATUS
 
-- Version: v8-returning-callers (11-state) — patched Feb 9 2026
+- Version: v8-returning-callers (11-state) — patched Feb 9 2026 (v41)
 - Previous: v7-ux-refined (8-state)
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
-- Retell Phone Number Version: 37 (bound to +13126463816)
-- Retell Published Version: 36
+- Retell Phone Number Version: 41 (bound to +13126463816)
+- Retell Published Version: 41
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: LIVE — patched Feb 9 2026
+- Deployment status: LIVE — comprehensive fix Feb 9 2026
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
 - Config file: retell-llm-v8-returning-callers.json
 
-## Feb 9 Patch (v36/37)
+## Feb 9 Patch #4 (v41) — Comprehensive 14-Issue Fix
+
+Fix from call_3e059f1d5330b54e35f9556365b analysis (6 agent + 4 backend + 4 dashboard):
+
+### Voice Agent (A1-A6):
+- **A1: Pre_confirm template guard** — BLOCKING check that customer_name is a real name, not `{{customer_name}}`, phone number, or placeholder. Agent must ask if missing.
+- **A2: Booking tool-first enforcement** — Rewritten to same pattern as welcome→lookup fix. "Your FIRST and ONLY action is to call book_service. Do NOT generate ANY text before calling it." NEVER fabricate confirmations.
+- **A3: Discovery name gate** — BLOCKING REQUIREMENT: must have real name before ANY other questions. Edge description enforces name requirement.
+- **A4: Lookup identity statements** — Replaced "Hey — is this {{customer_name}}?" questions with statements ("Good to hear from you again, {{customer_name}}.") because speak_during_transition fires immediately without waiting for a response.
+- **A5: Appointment awareness** — If lookup returns upcoming_appointment AND caller_intent is hvac_issue, agent MUST mention existing appointment to prevent double-booking.
+- **A6: No redundant lookups** — Added rule to booking, confirm, and general_prompt: "NEVER call lookup_caller more than once per call."
+
+### V2 Backend (B1-B4):
+- **B1: appointmentBooked conservative fallback** — Changed from `call_analysis.call_successful` to `false` when no saved session exists (safer: creates Lead instead of false-positive Job)
+- **B2: Customer name no phone fallback** — Removed phone number from name fallback chain, now defaults to "Unknown Caller"
+- **B3: Tag classifier word boundaries** — Added `containsPhrase()` helper with word boundary regex for short keywords. Refined SNOW_ICE and LEGAL_MENTION to multi-word patterns to prevent false matches on "service", "issue", "price"
+- **B4: Calls webhook booking_status** — Added booking_status field to calls webhook payload
+
+### Dashboard (C1-C4):
+- **C1: is_ai_booked derived** — Changed from hard-coded `true` to `Boolean(body.scheduled_at)` — only marks AI-booked when booking actually exists
+- **C2: Customer name sanitization** — Added `sanitizeCustomerName()` helper that rejects phone numbers as names, applied at all 4 insert/update sites
+- **C3: Tag category validation** — Tightened Zod schema to validate against 9 known taxonomy categories
+- **C4: Calls webhook classification** — Added booking_status, caller_type, primary_intent to calls schema and handler
+
+## Feb 9 Patch #3 (v39/40) — Lookup State Tool-First Fix
+
+Fix from call_8cf70e9be98d9e862898c209542 analysis:
+- **Lookup state_prompt rewritten for tool-first execution** — "Your FIRST action MUST be calling lookup_caller. Do NOT generate any text before calling it."
+- **execution_message changed** — "One sec, let me pull up your account..." → "Pulling that up now..." to avoid double-speak with welcome transition
+- **found=true/no-name case strengthened** — Say EXACTLY "I see some history on your number", not "is this the right number?"
+- Root cause: Same as welcome — LLM chose text generation over tool call because prompt had text-generation instructions before the tool call directive.
+
+## Feb 9 Patch #2 (v38/39) — Welcome State Transition Fix
+
+Fix from call_9e749f103c3a789182802a61c6b analysis:
+- **CRITICAL: Welcome→lookup edge now has `parameters`** (caller_intent, problem_summary) — makes the edge a compelling tool call so the LLM invokes it instead of generating text
+- **Edge description rewritten as imperative** — "Transition immediately — do not respond with text first"
+- **Welcome state_prompt simplified** — removed text-generation instructions that competed with edge tool call; LLM now uses `speak_during_transition` for speech
+- **interruption_sensitivity lowered** — 0.8 → 0.5 to reduce echo-triggered false speech
+- Root cause: Retell edges are internally LLM tool calls. GPT-4o-mini produces text OR a tool call, not both. Old prompt encouraged text generation, so the edge never fired.
+
+## Feb 9 Patch #1 (v36/37)
 
 Fixes from call_34883974e5d7ef5804ba49ce98c analysis:
 - **CRITICAL: Moved `book_service` from `general_tools` to `booking` state tools only** — prevents state machine bypass (agent was skipping safety, pre_confirm, and booking directly from lookup)

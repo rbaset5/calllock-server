@@ -258,8 +258,12 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
   // Prefer custom analysis data, fall back to regex for address
   const serviceAddress = custom?.service_address || extractAddressFromTranscript(callData.transcript);
 
-  // Determine if appointment was booked based on call analysis
-  const appointmentBooked = callData.call_analysis?.call_successful === true;
+  // Determine if appointment was booked.
+  // This fallback path runs when no saved session exists, meaning the booking
+  // tool likely never ran successfully. Default to false (safer: creates a Lead
+  // instead of a Job). The saved session path uses state.appointmentBooked from
+  // the actual tool call.
+  const appointmentBooked = false;
 
   // Determine end call reason from Retell's disconnection_reason
   let endCallReason = mapDisconnectionReason(callData.disconnection_reason);
