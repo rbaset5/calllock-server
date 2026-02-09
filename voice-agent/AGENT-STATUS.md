@@ -1,18 +1,28 @@
 # AGENT STATUS
 
-- Version: v8-returning-callers (11-state)
+- Version: v8-returning-callers (11-state) — patched Feb 9 2026
 - Previous: v7-ux-refined (8-state)
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
-- Retell Phone Number Version: 30 (bound to +13126463816)
-- Retell Published Version: 29
+- Retell Phone Number Version: 37 (bound to +13126463816)
+- Retell Published Version: 36
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: LIVE — deployed Feb 7 2026
+- Deployment status: LIVE — patched Feb 9 2026
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
 - Config file: retell-llm-v8-returning-callers.json
+
+## Feb 9 Patch (v36/37)
+
+Fixes from call_34883974e5d7ef5804ba49ce98c analysis:
+- **CRITICAL: Moved `book_service` from `general_tools` to `booking` state tools only** — prevents state machine bypass (agent was skipping safety, pre_confirm, and booking directly from lookup)
+- **Welcome state anti-repetition rules** — immediate transition after acknowledging issue, background noise guard, never re-ask rule
+- **Lookup state context continuity** — reference the issue already described in welcome, no repeat of "let me look you up"
+- **Brevity tightening** — max 1 sentence for acknowledgments, 5 words or fewer
+- **customer_phone description** — changed from "TBD" to "auto" for consistency
+- **Cal.com lookup returns attendee name** — prevents re-asking name when Cal.com booking already has it
 
 ## What's New in v8
 

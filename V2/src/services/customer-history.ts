@@ -317,6 +317,11 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
       date: calResult.booking.date,
       time: calResult.booking.time,
     };
+    // Use attendee name from Cal.com as early fallback
+    // Will be overridden by Supabase booking name if available (section 3 below)
+    if (calResult.booking.attendeeName && !result.customerName) {
+      result.customerName = calResult.booking.attendeeName;
+    }
   }
 
   // 2. Get recent calls from Supabase

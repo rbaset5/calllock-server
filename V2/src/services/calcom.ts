@@ -32,6 +32,7 @@ interface LookupResult {
     date: string;
     time: string;
     status: string;
+    attendeeName?: string;
   };
   message: string;
 }
@@ -98,7 +99,16 @@ export async function lookupBookingByPhone(phone: string): Promise<LookupResult>
 
     if (matchingBooking) {
       const startDate = new Date(matchingBooking.start);
-      log.info({ bookingUid: matchingBooking.uid }, "Booking found");
+      // Extract name from the matching attendee
+      const matchingAttendee = matchingBooking.attendees?.find((attendee) => {
+        const attendeePhone = attendee.phone?.replace(/\D/g, "") || "";
+        return (
+          attendeePhone.includes(normalizedPhone) ||
+          normalizedPhone.includes(attendeePhone)
+        );
+      });
+      const attendeeName = matchingAttendee?.name || undefined;
+      log.info({ bookingUid: matchingBooking.uid, attendeeName }, "Booking found");
       return {
         found: true,
         booking: {
@@ -116,6 +126,7 @@ export async function lookupBookingByPhone(phone: string): Promise<LookupResult>
             timeZone: SERVICE_TIMEZONE,
           }),
           status: matchingBooking.status,
+          attendeeName,
         },
         message: `Found appointment for ${startDate.toLocaleDateString("en-US", { timeZone: SERVICE_TIMEZONE })}`,
       };
