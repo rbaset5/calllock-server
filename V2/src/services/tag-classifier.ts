@@ -9,6 +9,20 @@ import { createModuleLogger } from "../utils/logger.js";
 const log = createModuleLogger("tag-classifier");
 
 /**
+ * Check if text contains a keyword as a whole word/phrase.
+ * Uses word boundaries to prevent false positives like "ice" in "service".
+ * Multi-word phrases (2+ words) are naturally specific enough for substring matching.
+ * Short single words (<= 4 chars) require word boundary regex.
+ */
+function containsPhrase(text: string, phrase: string): boolean {
+  if (phrase.includes(' ') || phrase.length > 4) {
+    return text.includes(phrase);
+  }
+  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+}
+
+/**
  * Taxonomy structure: 9 categories with 117 total tags
  */
 export interface TaxonomyTags {
@@ -193,7 +207,7 @@ const RECOVERY_PATTERNS = {
   COMPLAINT_NOFIX: ["still broken", "didn't fix", "same problem"],
   ESCALATION_REQ: ["speak to manager", "need supervisor", "not satisfied"],
   REVIEW_THREAT: ["leave review", "tell everyone", "report you"],
-  LEGAL_MENTION: ["lawyer", "sue", "attorney", "legal action"],
+  LEGAL_MENTION: ["lawyer", "sue you", "suing", "attorney", "legal action", "take legal"],
   REFUND_REQ: ["want refund", "money back", "charge back"],
   COMPETITOR_MENTION: ["other company", "someone else said", "got cheaper quote"],
   LOST_CUSTOMER: ["switching companies", "going elsewhere", "done with you"],
@@ -217,7 +231,7 @@ const LOGISTICS_PATTERNS = {
   UTILITY_SHUTOFF: ["shut off gas", "turn off power", "utility shutoff"],
   SCOPE_LIMITED: ["only look at", "just check", "specific issue only"],
   VENDOR_ACCESS: ["vendor entrance", "loading dock", "service entrance"],
-  SNOW_ICE: ["snow", "ice", "winter weather"],
+  SNOW_ICE: ["snow", "ice storm", "iced over", "ice on", "icy", "winter weather"],
   SEASONAL_PREP: ["winterize", "summer prep", "seasonal"],
   MULTIUNIT_COORD: ["multiple units", "condo", "apartment complex"],
   HOA_APPROVAL: ["hoa approval", "homeowners association", "need hoa ok"],
@@ -316,14 +330,14 @@ export function classifyCall(
 
   // Classify HAZARD
   for (const [tag, patterns] of Object.entries(HAZARD_PATTERNS)) {
-    if (patterns.some((p) => textToAnalyze.includes(p))) {
+    if (patterns.some((p) => containsPhrase(textToAnalyze, p))) {
       tags.HAZARD.push(tag);
     }
   }
 
   // Classify URGENCY
   for (const [tag, patterns] of Object.entries(URGENCY_PATTERNS)) {
-    if (patterns.some((p) => textToAnalyze.includes(p))) {
+    if (patterns.some((p) => containsPhrase(textToAnalyze, p))) {
       tags.URGENCY.push(tag);
     }
   }
@@ -343,14 +357,14 @@ export function classifyCall(
 
   // Classify SERVICE_TYPE
   for (const [tag, patterns] of Object.entries(SERVICE_TYPE_PATTERNS)) {
-    if (patterns.some((p) => textToAnalyze.includes(p))) {
+    if (patterns.some((p) => containsPhrase(textToAnalyze, p))) {
       tags.SERVICE_TYPE.push(tag);
     }
   }
 
   // Classify REVENUE
   for (const [tag, patterns] of Object.entries(REVENUE_PATTERNS)) {
-    if (patterns.some((p) => textToAnalyze.includes(p))) {
+    if (patterns.some((p) => containsPhrase(textToAnalyze, p))) {
       tags.REVENUE.push(tag);
     }
   }
@@ -371,21 +385,21 @@ export function classifyCall(
 
   // Classify RECOVERY
   for (const [tag, patterns] of Object.entries(RECOVERY_PATTERNS)) {
-    if (patterns.some((p) => textToAnalyze.includes(p))) {
+    if (patterns.some((p) => containsPhrase(textToAnalyze, p))) {
       tags.RECOVERY.push(tag);
     }
   }
 
   // Classify LOGISTICS
   for (const [tag, patterns] of Object.entries(LOGISTICS_PATTERNS)) {
-    if (patterns.some((p) => textToAnalyze.includes(p))) {
+    if (patterns.some((p) => containsPhrase(textToAnalyze, p))) {
       tags.LOGISTICS.push(tag);
     }
   }
 
   // Classify CUSTOMER
   for (const [tag, patterns] of Object.entries(CUSTOMER_PATTERNS)) {
-    if (patterns.some((p) => textToAnalyze.includes(p))) {
+    if (patterns.some((p) => containsPhrase(textToAnalyze, p))) {
       tags.CUSTOMER.push(tag);
     }
   }
@@ -414,7 +428,7 @@ export function classifyCall(
 
   // Classify NON_CUSTOMER
   for (const [tag, patterns] of Object.entries(NON_CUSTOMER_PATTERNS)) {
-    if (patterns.some((p) => textToAnalyze.includes(p))) {
+    if (patterns.some((p) => containsPhrase(textToAnalyze, p))) {
       tags.NON_CUSTOMER.push(tag);
     }
   }
@@ -428,7 +442,7 @@ export function classifyCall(
 
   // Classify CONTEXT
   for (const [tag, patterns] of Object.entries(CONTEXT_PATTERNS)) {
-    if (patterns.some((p) => textToAnalyze.includes(p))) {
+    if (patterns.some((p) => containsPhrase(textToAnalyze, p))) {
       tags.CONTEXT.push(tag);
     }
   }

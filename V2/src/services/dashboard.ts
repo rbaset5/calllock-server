@@ -254,7 +254,7 @@ export function transformToDashboardPayload(
     : retellData?.to_number;
 
   return {
-    customer_name: state.customerName || phoneFromRetell || state.customerPhone || "Unknown Caller",
+    customer_name: state.customerName || "Unknown Caller",
     customer_phone: state.customerPhone || phoneFromRetell || "Unknown",
     customer_address: state.serviceAddress || "Not provided",
     service_type: "hvac", // Always HVAC for this system
@@ -402,6 +402,10 @@ export interface DashboardCallPayload {
   // V4 Priority color classification
   priority_color?: PriorityColor;
   priority_reason?: string;
+  // V8 Booking status
+  booking_status?: string;
+  caller_type?: string;
+  primary_intent?: string;
   user_email: string;
 }
 
@@ -459,6 +463,8 @@ export async function sendCallToDashboard(
     // V4 Priority classification
     priority_color: priority.color,
     priority_reason: priority.reason,
+    // V8 Booking status
+    booking_status: state.appointmentBooked ? 'confirmed' : 'not_requested',
     user_email: DASHBOARD_USER_EMAIL!,
   };
 
