@@ -238,7 +238,7 @@ export function transformToDashboardPayload(
   const priority = detectPriority(state, retellData?.transcript, estimate);
 
   // V6: Classify call with HVAC Smart Tag Taxonomy
-  const tags = classifyCall(state, retellData?.transcript);
+  const tags = classifyCall(state, retellData?.transcript, retellData?.start_timestamp);
 
   // For sales leads, create a descriptive title from equipment info
   const issueDescription = state.endCallReason === "sales_lead"
@@ -408,6 +408,9 @@ export interface DashboardCallPayload {
   booking_status?: string;
   caller_type?: string;
   primary_intent?: string;
+  // Call analysis fields from Retell
+  call_summary?: string;
+  sentiment?: string;
   user_email: string;
 }
 
@@ -469,6 +472,9 @@ export async function sendCallToDashboard(
     priority_reason: priority.reason,
     // V8 Booking status
     booking_status: state.appointmentBooked ? 'confirmed' : 'not_requested',
+    // Call analysis from Retell's post-call AI
+    call_summary: retellData?.call_analysis?.call_summary,
+    sentiment: retellData?.call_analysis?.user_sentiment,
     user_email: DASHBOARD_USER_EMAIL!,
   };
 

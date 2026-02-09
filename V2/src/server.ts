@@ -249,54 +249,53 @@ function mapDisconnectionReason(reason?: string): EndCallReason | undefined {
  */
 function extractStateFromPostCallData(callData: RetellPostCallData): ConversationState {
   const custom = callData.call_analysis?.custom_analysis_data;
+  const dynVars = callData.collected_dynamic_variables;
 
   // Extract phone from caller ID based on call direction
   const customerPhone = callData.direction === "inbound"
     ? callData.from_number
     : callData.to_number;
 
-  // Prefer custom analysis data, fall back to regex for address
-  const serviceAddress = custom?.service_address || extractAddressFromTranscript(callData.transcript);
+  // Prefer dynamic variables (LLM state during call) > custom analysis > regex fallback
+  const customerName = dynVars?.customer_name || custom?.customer_name;
+  const serviceAddress = dynVars?.service_address || custom?.service_address
+    || extractAddressFromTranscript(callData.transcript);
+  const problemDescription = dynVars?.problem_description || dynVars?.problem_summary
+    || custom?.problem_description || callData.call_analysis?.call_summary;
 
-  // Determine if appointment was booked.
-  // This fallback path runs when no saved session exists, meaning the booking
-  // tool likely never ran successfully. Default to false (safer: creates a Lead
-  // instead of a Job). The saved session path uses state.appointmentBooked from
-  // the actual tool call.
-  const appointmentBooked = false;
+  // Check if booking was confirmed via dynamic variables
+  // book_service sets booking_confirmed=true in the LLM's dynamic variables
+  const appointmentBooked = dynVars?.booking_confirmed === "true";
+  const appointmentDateTime = dynVars?.appointment_time;
 
   // Determine end call reason from Retell's disconnection_reason
   let endCallReason = mapDisconnectionReason(callData.disconnection_reason);
 
-  // If agent hung up but no booking was made, treat as callback_later
-  // This ensures callback calls create Leads (not Jobs) in the dashboard
+  // If agent hung up, check if booking was made to determine outcome
   if (!endCallReason && callData.disconnection_reason === "agent_hangup") {
-    if (!appointmentBooked) {
-      endCallReason = "callback_later";
-    } else {
-      endCallReason = "completed";
-    }
+    endCallReason = appointmentBooked ? "completed" : "callback_later";
   }
 
   return {
     callId: callData.call_id,
-    // Customer info - prefer custom analysis
-    customerName: custom?.customer_name,
+    // Customer info - prefer dynamic variables > custom analysis
+    customerName,
     customerPhone,
     serviceAddress,
-    // Problem details - prefer custom analysis, fall back to summary
-    problemDescription: custom?.problem_description || callData.call_analysis?.call_summary,
+    // Problem details
+    problemDescription,
     problemDuration: custom?.problem_duration,
-    problemPattern: custom?.problem_pattern,
+    problemPattern: dynVars?.problem_pattern || custom?.problem_pattern,
     // Equipment details from custom analysis
     equipmentType: custom?.equipment_type,
     equipmentBrand: custom?.equipment_brand,
     equipmentAge: custom?.equipment_age,
-    // Urgency from custom analysis
-    urgency: mapUrgencyLevelFromAnalysis(custom?.urgency_level),
+    // Urgency - prefer dynamic variables > custom analysis
+    urgency: mapUrgencyLevelFromAnalysis(dynVars?.urgency_tier || custom?.urgency_level),
     // Call metadata
     callDirection: callData.direction,
     appointmentBooked,
+    appointmentDateTime,
     isSafetyEmergency: false,
     isUrgentEscalation: false,
     // End call reason from disconnection
@@ -320,16 +319,25 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
     }
 
     const callId = payload.call.call_id;
+    const event = payload.event;
+
     logger.info(
       {
         callId,
-        event: payload.event,
+        event,
         callStatus: payload.call.call_status,
         hasSummary: Boolean(payload.call.call_analysis?.call_summary),
         hasTranscript: Boolean(payload.call.transcript),
       },
-      "Retell post-call webhook received"
+      "Retell webhook received"
     );
+
+    // Only process post-call events — skip call_started and other lifecycle events
+    // Retell sends multiple event types to the same webhook_url
+    if (event !== "call_ended" && event !== "call_analyzed") {
+      logger.info({ callId, event }, "Skipping non-post-call event");
+      return res.json({ success: true, message: `Skipped event: ${event}` });
+    }
 
     // Check if dashboard integration is enabled
     if (!isDashboardEnabled()) {
@@ -1032,8 +1040,8 @@ app.post("/webhook/retell/create_callback", async (req: Request, res: Response) 
     return res.json({
       success: true,
       message: urgency === "urgent"
-        ? "Done — I've flagged this as urgent. Someone will call you back within 30 minutes."
-        : "Done — someone from the team will call you back within the hour.",
+        ? "Done — I've flagged this as urgent. Someone from the team will reach out as soon as possible."
+        : "Done — I've passed this along to the team. They'll reach out as soon as possible.",
     });
   } catch (error) {
     logger.error({ error }, "create_callback failed");
