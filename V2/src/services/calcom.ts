@@ -59,7 +59,7 @@ export async function lookupBookingByPhone(phone: string): Promise<LookupResult>
 
   try {
     // Normalize phone number (remove spaces, dashes, etc.)
-    const normalizedPhone = phone.replace(/\D/g, "");
+    const normalizedPhone = phone.replace(/[^\d+]/g, "");
 
     log.info({ phone: maskPhone(phone) }, "Looking up booking");
 

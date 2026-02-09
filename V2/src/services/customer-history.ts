@@ -28,16 +28,15 @@ interface CallRecord {
 }
 
 /**
- * Booking record from Supabase
+ * Job record from Supabase (used for booking history)
  */
-interface BookingRecord {
-  call_id: string;
+interface JobRecord {
+  original_call_id?: string;
   customer_name?: string;
-  phone: string;
-  address: string;
-  hvac_issue_type?: string;
-  problem_description?: string;
-  scheduled_time: string;
+  customer_phone: string;
+  customer_address: string;
+  service_type?: string;
+  scheduled_at?: string;
   status: string;
 }
 
@@ -281,7 +280,7 @@ function buildSummaryMessage(result: CustomerHistoryResult): string {
  * Get customer history by phone number
  */
 export async function getCustomerHistory(phone: string): Promise<CustomerHistoryResult> {
-  const normalizedPhone = phone.replace(/\D/g, "");
+  const normalizedPhone = phone.replace(/[^\d+]/g, "");
   log.info({ phone: maskPhone(phone) }, "Looking up customer history");
 
   // Start with empty result
@@ -354,64 +353,64 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
     }
   }
 
-  // 3. Get bookings from Supabase (past and upcoming)
-  const bookings = await supabaseQuery<BookingRecord>(
-    "bookings",
-    `phone=eq.${encodeURIComponent(normalizedPhone)}&order=scheduled_time.desc&limit=5`
+  // 3. Get jobs from Supabase (past and upcoming bookings)
+  const jobs = await supabaseQuery<JobRecord>(
+    "jobs",
+    `customer_phone=eq.${encodeURIComponent(normalizedPhone)}&order=scheduled_at.desc.nulls.last&limit=5`
   );
 
-  if (bookings && bookings.length > 0) {
+  if (jobs && jobs.length > 0) {
     result.found = true;
 
-    // Extract customer name from most recent booking
-    if (bookings[0].customer_name) {
-      result.customerName = bookings[0].customer_name;
+    // Extract customer name from most recent job
+    if (jobs[0].customer_name) {
+      result.customerName = jobs[0].customer_name;
     }
 
-    // Extract address from most recent booking with an address
-    const bookingWithAddress = bookings.find((b) => b.address && b.address !== "TBD");
-    if (bookingWithAddress) {
-      result.address = bookingWithAddress.address;
+    // Extract address from most recent job with an address
+    const jobWithAddress = jobs.find((j) => j.customer_address && j.customer_address !== "TBD");
+    if (jobWithAddress) {
+      result.address = jobWithAddress.customer_address;
       // Extract ZIP code from address (5-digit pattern at end)
-      const zipMatch = bookingWithAddress.address.match(/\b(\d{5})(?:-\d{4})?\b/);
+      const zipMatch = jobWithAddress.customer_address.match(/\b(\d{5})(?:-\d{4})?\b/);
       if (zipMatch) {
         result.zipCode = zipMatch[1];
       }
     }
 
-    // If we have an upcoming appointment from Cal.com, add the issue from booking
-    if (result.upcomingAppointment && bookings[0].problem_description) {
-      const upcomingBooking = bookings.find(
-        (b) => new Date(b.scheduled_time) > new Date()
+    // If we have an upcoming appointment from Cal.com, add the issue from job
+    if (result.upcomingAppointment && jobs[0].service_type) {
+      const upcomingJob = jobs.find(
+        (j) => j.scheduled_at && new Date(j.scheduled_at) > new Date()
       );
-      if (upcomingBooking) {
-        result.upcomingAppointment.issue = upcomingBooking.problem_description;
+      if (upcomingJob) {
+        result.upcomingAppointment.issue = upcomingJob.service_type;
       }
     }
 
-    // Check for upcoming appointments in Supabase bookings (supplement Cal.com)
+    // Check for upcoming appointments in Supabase jobs (supplement Cal.com)
     if (!result.upcomingAppointment) {
-      const upcomingBooking = bookings.find(
-        (b) => new Date(b.scheduled_time) > new Date()
+      const upcomingJob = jobs.find(
+        (j) => j.scheduled_at && new Date(j.scheduled_at) > new Date()
       );
-      if (upcomingBooking) {
+      if (upcomingJob && upcomingJob.scheduled_at) {
         result.upcomingAppointment = {
-          date: formatDate(upcomingBooking.scheduled_time),
-          time: formatTime(upcomingBooking.scheduled_time),
-          issue: upcomingBooking.problem_description,
-          jobId: upcomingBooking.call_id, // Use call_id as reference for job lookup
+          date: formatDate(upcomingJob.scheduled_at),
+          time: formatTime(upcomingJob.scheduled_at),
+          issue: upcomingJob.service_type,
+          jobId: upcomingJob.original_call_id,
         };
       }
     }
 
     // Add past appointments
-    result.pastAppointments = bookings
-      .filter((b) => new Date(b.scheduled_time) < new Date())
+    result.pastAppointments = jobs
+      .filter((j) => j.scheduled_at && new Date(j.scheduled_at) < new Date())
       .slice(0, 3)
-      .map((b) => ({
-        date: formatDate(b.scheduled_time),
-        issue: b.problem_description,
-        status: b.status,
+      .map((j) => ({
+        date: formatDate(j.scheduled_at!),
+        issue: j.service_type,
+        status: j.status,
       }));
   }
 
