@@ -1032,8 +1032,8 @@ app.post("/webhook/retell/create_callback", async (req: Request, res: Response) 
     return res.json({
       success: true,
       message: urgency === "urgent"
-        ? "Done — I've flagged this as urgent. Someone will call you back within 30 minutes."
-        : "Done — someone from the team will call you back within the hour.",
+        ? "Done — I've flagged this as urgent. Someone from the team will reach out as soon as possible."
+        : "Done — I've passed this along to the team. They'll reach out as soon as possible.",
     });
   } catch (error) {
     logger.error({ error }, "create_callback failed");
