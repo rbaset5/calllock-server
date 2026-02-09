@@ -294,11 +294,14 @@ export interface ConversationState {
 // ============================================
 
 /**
- * Payload sent by Retell AI's post-call webhook
- * This fires after the call ends AND audio processing is complete
+ * Payload sent by Retell AI's webhook
+ * Retell sends multiple event types to the same webhook_url:
+ * - "call_started": fires when call connects
+ * - "call_ended": fires when call ends
+ * - "call_analyzed": fires after post-call analysis completes
  */
 export interface RetellPostCallWebhook {
-  event: "call_ended" | "call_analyzed";
+  event: string; // "call_ended", "call_analyzed", "call_started", etc.
   call: RetellPostCallData;
 }
 
@@ -320,6 +323,8 @@ export interface RetellPostCallData {
   call_analysis?: RetellCallAnalysis;
   metadata?: Record<string, unknown>;
   disconnection_reason?: string;
+  /** Dynamic variables collected by the LLM during the call (customer_name, service_address, etc.) */
+  collected_dynamic_variables?: Record<string, string>;
 }
 
 /**

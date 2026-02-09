@@ -8,18 +8,33 @@ import { createModuleLogger } from "../utils/logger.js";
 
 const log = createModuleLogger("tag-classifier");
 
+/** Negation words that flip the meaning of a phrase match */
+const NEGATION_PATTERN = /\b(no|not|don't|doesn't|didn't|isn't|aren't|wasn't|weren't|never|deny|denied|any)\b/;
+
 /**
  * Check if text contains a keyword as a whole word/phrase.
  * Uses word boundaries to prevent false positives like "ice" in "service".
  * Multi-word phrases (2+ words) are naturally specific enough for substring matching.
- * Short single words (<= 4 chars) require word boundary regex.
+ * Single words (<= 5 chars) require word boundary regex.
+ * Negation-aware: returns false if a negation word appears in the 40 chars before the match
+ * (e.g., "no gas smell" won't match "gas smell").
  */
 function containsPhrase(text: string, phrase: string): boolean {
-  if (phrase.includes(' ') || phrase.length > 4) {
-    return text.includes(phrase);
+  if (phrase.includes(' ') || phrase.length > 5) {
+    const idx = text.indexOf(phrase);
+    if (idx === -1) return false;
+    // Check for negation in the 40 chars before the match
+    const prefix = text.substring(Math.max(0, idx - 40), idx);
+    if (NEGATION_PATTERN.test(prefix)) return false;
+    return true;
   }
   const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+  const match = new RegExp(`\\b${escaped}\\b`, 'i').exec(text);
+  if (!match) return false;
+  // Check for negation in the 40 chars before the match
+  const prefix = text.substring(Math.max(0, match.index - 40), match.index);
+  if (NEGATION_PATTERN.test(prefix)) return false;
+  return true;
 }
 
 /**
@@ -306,7 +321,8 @@ const CONTEXT_PATTERNS = {
  */
 export function classifyCall(
   state: ConversationState,
-  transcript?: string
+  transcript?: string,
+  callStartTimestamp?: number
 ): TaxonomyTags {
   const tags: TaxonomyTags = {
     HAZARD: [],
@@ -447,11 +463,13 @@ export function classifyCall(
     }
   }
 
-  // Auto-tag seasonal context
-  const now = new Date();
-  const month = now.getMonth(); // 0-11
-  const hour = now.getHours(); // 0-23
-  const day = now.getDay(); // 0-6
+  // Auto-tag seasonal context using call timestamp in business timezone (Central Time)
+  const callDate = callStartTimestamp ? new Date(callStartTimestamp) : new Date();
+  const cstString = callDate.toLocaleString('en-US', { timeZone: 'America/Chicago' });
+  const cstDate = new Date(cstString);
+  const month = cstDate.getMonth(); // 0-11
+  const hour = cstDate.getHours(); // 0-23
+  const day = cstDate.getDay(); // 0-6
 
   if (month >= 5 && month <= 7) {
     // June-August
