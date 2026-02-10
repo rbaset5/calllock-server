@@ -20,7 +20,7 @@ CallLock is a Done-For-You missed call recovery service for trades businesses (H
 |-----------|-------------|------------|
 | `V2/` | Backend webhook server (Express/Node.js) | Render: calllock-server.onrender.com |
 | `V3/` | V3 backend with triage engine (experimental) | - |
-| `calllock-dashboard/` | **Symlink** → `/Users/rashidbaset/calllock-dashboard` (separate git repo) | Vercel: calllock-dashboard-2.vercel.app |
+| `calllock-dashboard/` | **Symlink** → `/Users/rashidbaset/calllock-dashboard` (separate git repo) | Vercel: callseal-app (workbridge-ai) |
 | `voice-agent/` | **Voice AI agent configs, optimization logs, tests** | Retell AI |
 | `docs/` | Documentation and agent configurations | - |
 
@@ -100,7 +100,7 @@ curl -s "https://api.retellai.com/v2/get-call/CALL_ID" \
 | Service | URL | Purpose |
 |---------|-----|---------|
 | V2 Backend | https://calllock-server.onrender.com | Retell webhooks, tool execution |
-| Dashboard | https://calllock-dashboard-2.vercel.app | Business owner UI |
+| Dashboard | https://app.calllock.co (Vercel: callseal-app) | Business owner UI |
 | Supabase | https://xboybmqtwsxmdokgzclk.supabase.co | Database |
 | Retell AI | Dashboard at retellai.com | Voice AI configuration |
 
@@ -110,7 +110,7 @@ curl -s "https://api.retellai.com/v2/get-call/CALL_ID" \
 
 Required for dashboard sync:
 ```
-DASHBOARD_WEBHOOK_URL=https://calllock-dashboard-2.vercel.app/api/webhook/jobs
+DASHBOARD_WEBHOOK_URL=https://app.calllock.co/api/webhook/jobs
 DASHBOARD_WEBHOOK_SECRET=<shared-secret>
 DASHBOARD_USER_EMAIL=user@example.com
 ```
