@@ -62,6 +62,10 @@ services:
       - key: DASHBOARD_USER_EMAIL
         sync: false
 
+      # QA / Testing
+      - key: MASK_TEST_PHONES
+        value: "true"
+
       # Keep-alive ping
       - key: RENDER_URL
         sync: false
