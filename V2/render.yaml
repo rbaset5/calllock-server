@@ -45,6 +45,8 @@ services:
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
 
       # Twilio (optional)
       - key: TWILIO_ACCOUNT_SID
@@ -61,6 +63,10 @@ services:
         sync: false
       - key: DASHBOARD_USER_EMAIL
         sync: false
+
+      # QA / Testing
+      - key: MASK_TEST_PHONES
+        value: "true"
 
       # Keep-alive ping
       - key: RENDER_URL
