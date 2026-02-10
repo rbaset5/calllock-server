@@ -1,18 +1,53 @@
 # AGENT STATUS
 
-- Version: v8-returning-callers (11-state) — patched Feb 10 2026 (v64)
-- Previous: v8-returning-callers (v62)
+- Version: v8-returning-callers (11-state) — patched Feb 10 2026 (v67)
+- Previous: v8-returning-callers (v65)
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
-- Retell Phone Number Version: 64 (bound to +13126463816)
-- Retell Published Version: 64
+- Retell Phone Number Version: 67 (bound to +13126463816)
+- Retell Published Version: 67
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: LIVE — discovery transition enforcement + V2 service role key Feb 10 2026
+- Deployment status: LIVE — premature hangup fix Feb 10 2026
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
 - Config file: retell-llm-v8-returning-callers.json
+
+## Feb 10 Patch #11 (v67) — Premature Hangup Fix
+
+v66 call (call_f3f5e563a6431e7bf3ccea5eb54) — agent hung up on caller after 38 seconds.
+
+### Root cause:
+1. Lookup state asked a question during transition speech ("is this about that, or a new issue?") but transition fires instantly — user cannot answer
+2. Safety state received silence (transition speech still playing) and called end_call with "misunderstanding or disconnection" — violating end_call's own description (911 only)
+
+### Voice Agent Changes:
+- **lookup state**: Changed appointment mention from question to STATEMENT: "I also see you have an appointment on [date] at [time]." No questions during transitions since they fire immediately.
+- **safety state**: Added "NEVER End Call From This State (unless 911)" rule. If caller says something unrelated, treat as CLEAR NO and proceed. Never say "misunderstanding" or "disconnection."
+
+## Feb 10 Patch #10 (v65) — Booking Firewall + State Boundary + Anti-Fabrication
+
+v64 call (call_46d1911b03cad41204e56f464f7) revealed 4 regressions:
+1. **STATE COLLAPSE**: Agent stayed in service_area for 62 seconds after ZIP validation, performing discovery + urgency + pre_confirm work without transitioning (repeat of v60/Patch #6)
+2. **FABRICATED BOOKING**: Agent said "appointment is all set/confirmed" but NEVER called book_service. Used create_callback_request with custom execution_message to fake a booking confirmation (repeat of v57/Patch #5)
+3. **ADDRESS NEVER COLLECTED**: service_address ended as "TBD" — discovery was effectively bypassed
+4. **FAST-TRACK FAILED**: Lookup returned empty arrays (Supabase service role key not yet set in Render)
+
+### Voice Agent Changes:
+- **general_prompt Rule 7**: Strengthened to "Do NOT perform the next state's job inside the current state"
+- **general_prompt Rule 11 (BOOKING FIREWALL)**: Reinstated global prohibition on booking language without successful book_service. Covers execution_message text passed to any tool.
+- **general_prompt Rule 12 (STATE BOUNDARY)**: Each state has ONE job → IMMEDIATELY call transition edge after completing it
+- **general_prompt Rule 13 (CALLBACK GUARD)**: create_callback_request is for CALLBACKS ONLY. NEVER pass booking language in execution_message.
+- **service_area state**: Added CRITICAL enforcement — after valid ZIP, ONLY action is transition edge. No extra questions. MAX 2 exchanges.
+- **discovery state**: Added BLOCKING requirement for real street address before transition. Added explicit "do NOT ask about timing" (urgency's job) and "do NOT read back summary" (pre_confirm's job).
+- **urgency state**: Added 4 anti-fabrication rules — create_callback_request is not a booking substitute, never pass booking language in execution_message, must transition to pre_confirm for scheduling.
+
+### Root Cause Analysis:
+v61 removed Rules 11-16 and relied on structural enforcement (end_call removal from key states). But structural enforcement didn't account for create_callback_request's execution_message being used to fake booking confirmations. The LLM found a new escape path: stay in service_area doing all downstream work, then use create_callback_request with custom execution_message to speak booking language.
+
+### Remaining Issue:
+SUPABASE_SERVICE_ROLE_KEY still needs to be set in Render dashboard for returning caller fast-track to work.
 
 ## Feb 10 Patch #9 (v64) — Discovery Transition Enforcement + Supabase RLS Fix
 
