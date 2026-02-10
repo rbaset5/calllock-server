@@ -328,6 +328,21 @@ export interface RetellPostCallData {
   disconnection_reason?: string;
   /** Dynamic variables collected by the LLM during the call (customer_name, service_address, etc.) */
   collected_dynamic_variables?: Record<string, string>;
+  /** Full transcript including tool call invocations and results */
+  transcript_with_tool_calls?: ToolCallEntry[];
+  /** Dynamic variables set on the LLM at call start (Twilio metadata, etc.) */
+  retell_llm_dynamic_variables?: Record<string, string>;
+}
+
+export interface ToolCallEntry {
+  role: "agent" | "user" | "tool_call_invocation" | "tool_call_result";
+  content?: string;
+  tool_call_id?: string;
+  name?: string;
+  arguments?: string;
+  successful?: boolean;
+  time_sec?: number;
+  type?: string;
 }
 
 /**

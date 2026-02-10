@@ -118,78 +118,20 @@ function buildAiSummary(
   state: ConversationState,
   retellData?: RetellPostCallData
 ): string {
-  const parts: string[] = [];
-
-  // Include Retell's AI-generated summary if available
-  if (retellData?.call_analysis?.call_summary) {
-    parts.push(retellData.call_analysis.call_summary);
+  // Prefer Retell's AI-generated call summary — it's a clean narrative.
+  // Issue type, outcome, and revenue are stored in dedicated dashboard fields,
+  // so don't duplicate them here.
+  const callSummary = retellData?.call_analysis?.call_summary;
+  if (callSummary) {
+    return callSummary;
   }
 
-  // Include problem description
+  // Fallback: build summary from state when Retell analysis is unavailable
   if (state.problemDescription) {
-    parts.push(`Issue: ${state.problemDescription}`);
+    return state.problemDescription;
   }
 
-  // Include diagnostic context fields from Problem Clarification phase
-  if (state.problemDuration) {
-    parts.push(`Duration: ${state.problemDuration}`);
-  }
-  if (state.problemOnset) {
-    parts.push(`Onset: ${state.problemOnset}`);
-  }
-  if (state.problemPattern) {
-    parts.push(`Pattern: ${state.problemPattern}`);
-  }
-  if (state.customerAttemptedFixes) {
-    parts.push(`Tried: ${state.customerAttemptedFixes}`);
-  }
-
-  // Include equipment details if captured (formatted nicely)
-  const equipmentParts: string[] = [];
-  if (state.equipmentBrand) equipmentParts.push(state.equipmentBrand);
-  if (state.equipmentType) equipmentParts.push(state.equipmentType);
-  if (state.equipmentLocation || state.equipmentAge) {
-    const details: string[] = [];
-    if (state.equipmentLocation) details.push(state.equipmentLocation);
-    if (state.equipmentAge) details.push(state.equipmentAge);
-    equipmentParts.push(`(${details.join(", ")})`);
-  }
-  if (equipmentParts.length > 0) {
-    parts.push(`Equipment: ${equipmentParts.join(" ")}`);
-  }
-
-  // Include HVAC issue type
-  if (state.hvacIssueType) {
-    parts.push(`Type: ${state.hvacIssueType}`);
-  }
-
-  // Include call outcome
-  if (state.endCallReason) {
-    const outcomeMap: Record<EndCallReason, string> = {
-      completed: "Appointment booked",
-      wrong_number: "Wrong number",
-      callback_later: "Customer requested callback",
-      safety_emergency: "SAFETY EMERGENCY - Customer advised to call 911",
-      urgent_escalation: "Urgent - Escalated to on-call technician",
-      out_of_area: "Out of service area",
-      waitlist_added: "Added to waitlist",
-      customer_hangup: "Customer hung up",
-      sales_lead: "Sales lead - Replacement inquiry",
-      cancelled: "Appointment cancelled",
-      rescheduled: "Appointment rescheduled",
-    };
-    parts.push(`Outcome: ${outcomeMap[state.endCallReason] || state.endCallReason}`);
-  }
-
-  // Include flags
-  if (state.isSafetyEmergency) {
-    parts.push("⚠️ SAFETY EMERGENCY");
-  }
-  if (state.isUrgentEscalation) {
-    parts.push("🔴 URGENT ESCALATION");
-  }
-
-  return parts.join(" | ") || "No summary available";
+  return "No summary available";
 }
 
 /**
