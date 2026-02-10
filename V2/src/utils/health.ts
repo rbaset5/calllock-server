@@ -16,6 +16,7 @@ export interface HealthStatus {
     anthropic: HealthCheckResult;
     calcom: HealthCheckResult;
     supabase: HealthCheckResult;
+    supabase_service_key: HealthCheckResult;
     twilio: HealthCheckResult;
   };
 }
@@ -149,6 +150,61 @@ export async function checkSupabase(): Promise<HealthCheckResult> {
 }
 
 /**
+ * Check Supabase service role key (used by customer-history for RLS-protected tables)
+ */
+export async function checkSupabaseServiceKey(): Promise<HealthCheckResult> {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) {
+    return { status: "degraded", message: key ? "Missing SUPABASE_URL" : "Missing SUPABASE_SERVICE_ROLE_KEY (caller history disabled)" };
+  }
+
+  const start = Date.now();
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    // Query calls table with limit=1 — this table has RLS, so anon key would fail
+    const response = await fetch(`${url}/rest/v1/calls?select=call_id&limit=1`, {
+      method: "GET",
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      return { status: "ok", latency: Date.now() - start };
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return {
+        status: "error",
+        latency: Date.now() - start,
+        message: `Auth failed (HTTP ${response.status}) — key may be wrong`,
+      };
+    }
+
+    return {
+      status: "degraded",
+      latency: Date.now() - start,
+      message: `HTTP ${response.status}`,
+    };
+  } catch (error) {
+    log.error({ error }, "Supabase service key health check failed");
+    return {
+      status: "error",
+      latency: Date.now() - start,
+      message: (error as Error).message,
+    };
+  }
+}
+
+/**
  * Check Twilio health (optional)
  */
 export async function checkTwilio(): Promise<HealthCheckResult> {
@@ -208,14 +264,15 @@ export async function checkTwilio(): Promise<HealthCheckResult> {
  * Run all health checks and return aggregated status
  */
 export async function runHealthChecks(): Promise<HealthStatus> {
-  const [anthropic, calcom, supabase, twilio] = await Promise.all([
+  const [anthropic, calcom, supabase, supabase_service_key, twilio] = await Promise.all([
     checkAnthropic(),
     checkCalCom(),
     checkSupabase(),
+    checkSupabaseServiceKey(),
     checkTwilio(),
   ]);
 
-  const dependencies = { anthropic, calcom, supabase, twilio };
+  const dependencies = { anthropic, calcom, supabase, supabase_service_key, twilio };
 
   // Determine overall status
   const statuses = Object.values(dependencies).map((d) => d.status);

@@ -15,6 +15,17 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABA
 
 const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_KEY);
 
+// Startup diagnostic — surface misconfiguration immediately
+if (isSupabaseConfigured) {
+  const keyType = process.env.SUPABASE_SERVICE_ROLE_KEY ? "service_role" : "anon";
+  log.info({ keyType }, "Supabase configured for customer history");
+} else {
+  log.warn(
+    { hasUrl: Boolean(SUPABASE_URL), hasKey: Boolean(SUPABASE_KEY) },
+    "Supabase NOT configured — customer history lookups will return empty"
+  );
+}
+
 /**
  * Call record from Supabase
  */
