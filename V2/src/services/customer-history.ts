@@ -10,9 +10,10 @@ import { lookupBookingByPhone } from "./calcom.js";
 const log = createModuleLogger("customer-history");
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+// Use service role key to bypass RLS (anon key blocked by row-level security on jobs/calls/customer_notes)
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 
-const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_KEY);
 
 /**
  * Call record from Supabase
@@ -122,8 +123,8 @@ async function supabaseQuery<T>(
       {
         method: "GET",
         headers: {
-          apikey: SUPABASE_ANON_KEY!,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          apikey: SUPABASE_KEY!,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
           "Content-Type": "application/json",
         },
       },

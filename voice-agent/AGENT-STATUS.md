@@ -1,18 +1,92 @@
 # AGENT STATUS
 
-- Version: v8-returning-callers (11-state) — patched Feb 9 2026 (v57)
-- Previous: v7-ux-refined (8-state)
+- Version: v8-returning-callers (11-state) — patched Feb 10 2026 (v64)
+- Previous: v8-returning-callers (v62)
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
-- Retell Phone Number Version: 57 (bound to +13126463816)
-- Retell Published Version: 57
+- Retell Phone Number Version: 64 (bound to +13126463816)
+- Retell Published Version: 64
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: LIVE — comprehensive fix Feb 9 2026
+- Deployment status: LIVE — discovery transition enforcement + V2 service role key Feb 10 2026
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
 - Config file: retell-llm-v8-returning-callers.json
+
+## Feb 10 Patch #9 (v64) — Discovery Transition Enforcement + Supabase RLS Fix
+
+v63 call (call_3bd9f25109243b8968322c64b12) revealed two issues:
+1. Discovery asked follow-up diagnostic question after having all 3 required fields (name, problem, address)
+2. Supabase RLS blocked ALL V2 backend reads — `lookup_caller` returns empty arrays for jobs/calls/notes for ALL callers
+
+### Voice Agent Changes:
+- **discovery state prompt**: Added "CRITICAL: Once you have all three, transition IMMEDIATELY. Do NOT ask follow-up diagnostic questions." Enforces that the tech diagnoses on-site, not the receptionist.
+
+### V2 Backend Changes:
+- **customer-history.ts**: Changed from `SUPABASE_ANON_KEY` to `SUPABASE_SERVICE_ROLE_KEY` (with anon fallback). The anon key was blocked by RLS on jobs, calls, and customer_notes tables. This was silently returning empty arrays for ALL callers since the returning-caller feature was deployed.
+- **render.yaml**: Added `SUPABASE_SERVICE_ROLE_KEY` env var
+- **REQUIRES**: Set `SUPABASE_SERVICE_ROLE_KEY` in Render dashboard (from Supabase Settings > API > service_role)
+
+### Impact:
+Once the service role key is set in Render, `lookup_caller` will return:
+- Past call history (recentCalls)
+- Job/booking history (pastAppointments)
+- Service address and ZIP code (address, zipCode) — enabling fast-track for returning callers
+- Operator notes (operatorNotes)
+- Callback promises (callbackPromise)
+
+## Feb 10 Patch #8 (v62) — Fast-Track Edge Parameters for Returning Callers
+
+v61 structural fix validated on call_76d741d12544cc86f0f7c892ad0 (perfect state flow, real booking, positive sentiment). However, known callers were still asked for ZIP and address because edge parameters didn't carry lookup data through the state machine.
+
+### Root cause:
+- Backend `lookup_caller` ALREADY returns `address` and `zipCode` from jobs table
+- service_area prompt ALREADY handles `{{zip_code}}` pre-fill
+- discovery prompt ALREADY checks for pre-filled `{{service_address}}`
+- BUT: lookup→safety and safety→service_area edges didn't pass these fields, so dynamic variables were never set
+
+### Changes:
+- **lookup→safety edge**: Added `zip_code` and `service_address` optional parameters
+- **lookup state prompt**: Added "Pre-fill from Lookup Data" instruction to pass zip/address from lookup result
+- **safety→service_area edge**: Added `zip_code` and `service_address` pass-through parameters
+- **safety state prompt**: Added "Data Passthrough" instruction to carry zip/address through
+
+### Expected behavior for returning callers with job history:
+- service_area auto-transitions without asking ZIP ({{zip_code}} already set)
+- discovery skips address question ({{service_address}} already set)
+- ~15-20s saved per returning caller call
+
+## Feb 10 Patch #7 (v61) — Structural State Enforcement (end_call removal + prompt stripping)
+
+v60 anti-fabrication rules FAILED on call_7d33db930c795570683772823e9. Agent still collapsed flow into service_area (60s), skipped urgency/pre_confirm/booking, called end_call from discovery with "We'll get this scheduled" — book_service never called. Natural-language rules proven ineffective across v57, v59, v60.
+
+### Architectural changes (structural, not prompt-based):
+- **end_call removed from general_tools** — no longer available globally in all states
+- **end_call added to 9 specific states only**: welcome, safety, service_area, follow_up, manage_booking, urgency, booking, booking_failed, confirm
+- **end_call NOT available in**: lookup, discovery, pre_confirm — these states MUST transition forward (mechanically enforced)
+- **service_area prompt stripped to bare minimum** — only ZIP validation, no downstream concepts (problem, timing, booking)
+- **discovery prompt stripped** — removed timing engagement, anti-fabrication rules, state boundary text. Just: collect name + problem + address, transition.
+- **Rules 11-16 removed from general_prompt** — proven ineffective; structural enforcement replaces them
+
+### Why this is different from v60:
+v60 added TEXT telling the LLM what not to do. v61 REMOVES THE TOOLS the LLM needs to do the wrong thing. The agent literally cannot call end_call from discovery or pre_confirm — it's not in their tools array.
+
+## Feb 10 Patch #6 (v60) — State Collapse Prevention & Booking Firewall
+
+Fix from call_712a467c4c9956897baccdd547a analysis (Carl's second fake booking):
+- Agent collapsed entire booking flow into service_area state (97 seconds without transitioning)
+- Asked diagnostic questions, collected timing, read back confirmation, said "you're all set" — all within service_area
+- Never reached discovery, urgency, pre_confirm, or booking states
+- book_service was never called; booking was fabricated
+- State-specific anti-fabrication rules never applied because those states were never entered
+
+### Changes:
+- **Rule 15: BOOKING FIREWALL** — Global prohibition on booking language ('booked', 'scheduled', 'confirmed', 'all set', 'locked in', 'finalized') in ALL states except confirm. This catches fabrication regardless of which state the agent is stuck in.
+- **Rule 16: STATE BOUNDARY ENFORCEMENT** — After completing a state's primary action, MUST transition before doing anything else. No follow-up questions, no extra info collection.
+- **service_area: CRITICAL STATE BOUNDARY** — Explicit list of forbidden actions (asking about problem, timing, scheduling, reading back details). Max 2 exchanges. Transition immediately after ZIP validation.
+- **discovery: STATE BOUNDARY** — Max 3 questions. Do NOT ask about timing (urgency's job). Transition immediately when info is complete.
+- **end_call: FINAL CHECK** — Before ending, verify: if scheduling was discussed, was book_service called and did it return booked: true? If not, offer callback instead.
 
 ## Feb 9 Patch #5 (v57) — Anti-Fabrication Booking Guard
 
