@@ -141,7 +141,10 @@ export interface RetellCallObject {
 export type ServiceType = "HVAC";
 
 // HVAC-specific issue classification
-export type HVACIssueType = "Cooling" | "Heating" | "Maintenance";
+export type HVACIssueType =
+  | "Cooling" | "Heating" | "Maintenance"
+  | "Leaking" | "No Cool" | "No Heat" | "Noisy System"
+  | "Odor" | "Not Running" | "Thermostat";
 
 // Two-tier emergency system + routine
 export type UrgencyTier = "LifeSafety" | "Urgent" | "Routine";

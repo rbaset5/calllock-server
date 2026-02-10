@@ -9,6 +9,7 @@ import {
   RetellPostCallData,
   UrgencyLevel,
   EndCallReason,
+  HVACIssueType,
 } from "./types/retell.js";
 import {
   lookupBookingByPhone,
@@ -243,6 +244,52 @@ function mapDisconnectionReason(reason?: string): EndCallReason | undefined {
 }
 
 /**
+ * Infer HVAC issue type from problem description and transcript
+ * Used as a fallback when the voice agent doesn't set hvacIssueType
+ */
+function inferHvacIssueType(problemDesc?: string, transcript?: string): HVACIssueType | undefined {
+  const text = [problemDesc, transcript].filter(Boolean).join(" ").toLowerCase();
+  if (!text) return undefined;
+
+  // Water/leak patterns
+  if (/water\s*(leak|puddle|drip|pool)|leak.*unit|puddle.*inside|dripping/i.test(text)) return "Leaking";
+  // Cooling patterns
+  if (/not?\s*cool|ac\s*(not|isn|won)|no\s*(cold|cool)|warm\s*air|won.t\s*cool/i.test(text)) return "No Cool";
+  // Heating patterns
+  if (/not?\s*heat|no\s*heat|furnace\s*(not|won|isn)|cold\s*air.*heat|won.t\s*heat/i.test(text)) return "No Heat";
+  // Noise patterns
+  if (/noise|loud|bang|rattle|squeal|grind|vibrat/i.test(text)) return "Noisy System";
+  // Smell patterns
+  if (/smell|odor|musty|mold/i.test(text)) return "Odor";
+  // Not running
+  if (/won.t\s*(start|turn|run)|not\s*(start|turn|run)|dead|no\s*power/i.test(text)) return "Not Running";
+  // Thermostat
+  if (/thermostat|temperature.*wrong|temp.*off/i.test(text)) return "Thermostat";
+  // Maintenance
+  if (/maintenance|tune.?up|check.?up|seasonal|filter/i.test(text)) return "Maintenance";
+
+  return undefined;
+}
+
+/**
+ * Infer urgency from problem description and transcript
+ * Used as a fallback when the voice agent doesn't set urgency_tier
+ */
+function inferUrgencyFromContext(problemDesc?: string, transcript?: string): UrgencyLevel | undefined {
+  const text = [problemDesc, transcript].filter(Boolean).join(" ").toLowerCase();
+  if (!text) return undefined;
+
+  // Emergency indicators
+  if (/gas\s*leak|carbon\s*monoxide|smoke|fire|sparking|flood/i.test(text)) return "Emergency";
+  // Urgent indicators
+  if (/water\s*leak|leak.*inside|puddle|no\s*(heat|cool|ac|air)|emergency|asap|today|right\s*away/i.test(text)) return "Urgent";
+  // Routine indicators
+  if (/maintenance|tune.?up|estimate|whenever|no\s*rush|this\s*week/i.test(text)) return "Routine";
+
+  return "Routine";
+}
+
+/**
  * Extract conversation state from post-call webhook data
  * Uses Retell's custom_analysis_data when available (AI-extracted fields)
  * Falls back to basic extraction for older calls or when analysis unavailable
@@ -280,6 +327,22 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     endCallReason = appointmentBooked ? "completed" : "callback_later";
   }
 
+  // Fabrication detection: agent said call was successful but booking never confirmed
+  if (!appointmentBooked && callData.call_analysis?.call_successful === true
+      && callData.disconnection_reason === "agent_hangup") {
+    logger.warn({ callId: callData.call_id },
+      "Possible fabricated booking: call_analysis says successful but booking_confirmed not set");
+  }
+
+  // Infer HVAC issue type from problem description / transcript
+  const hvacIssueType = inferHvacIssueType(problemDescription, callData.transcript);
+
+  // Urgency: prefer dynamic variables > custom analysis > inferred from context
+  let urgency = mapUrgencyLevelFromAnalysis(dynVars?.urgency_tier || custom?.urgency_level);
+  if (!urgency) {
+    urgency = inferUrgencyFromContext(problemDescription, callData.transcript);
+  }
+
   return {
     callId: callData.call_id,
     // Customer info - prefer dynamic variables > custom analysis
@@ -294,8 +357,10 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     equipmentType: custom?.equipment_type,
     equipmentBrand: custom?.equipment_brand,
     equipmentAge: custom?.equipment_age,
-    // Urgency - prefer dynamic variables > custom analysis
-    urgency: mapUrgencyLevelFromAnalysis(dynVars?.urgency_tier || custom?.urgency_level),
+    // HVAC classification
+    hvacIssueType,
+    // Urgency - dynamic vars > custom analysis > inferred
+    urgency,
     // Call metadata
     callDirection: callData.direction,
     appointmentBooked,

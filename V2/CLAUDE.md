@@ -57,7 +57,7 @@ The backend syncs call data to the CallLock Dashboard via webhooks. This is conf
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `DASHBOARD_WEBHOOK_URL` | Dashboard jobs webhook endpoint | `https://calllock-dashboard-2.vercel.app/api/webhook/jobs` |
+| `DASHBOARD_WEBHOOK_URL` | Dashboard jobs webhook endpoint | `https://app.calllock.co/api/webhook/jobs` |
 | `DASHBOARD_WEBHOOK_SECRET` | Shared secret for webhook auth | `9d04de2c8cdbdfe...` (generate with `openssl rand -hex 32`) |
 | `DASHBOARD_USER_EMAIL` | Email of dashboard user to sync data to | `user@example.com` |
 
