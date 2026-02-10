@@ -322,8 +322,8 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
   const customerPhone = maskTestPhone(rawPhone);
 
   // Prefer dynamic variables (LLM state during call) > custom analysis > regex fallback
-  const customerName = dynVars?.customer_name || custom?.customer_name;
-  const serviceAddress = dynVars?.service_address || custom?.service_address
+  let customerName = dynVars?.customer_name || custom?.customer_name;
+  let serviceAddress = dynVars?.service_address || custom?.service_address
     || extractAddressFromTranscript(callData.transcript);
   // Prefer detailed descriptions; fall back to call_summary when dynamic vars are vague
   const dynProblem = dynVars?.problem_description || dynVars?.problem_summary;
@@ -334,8 +334,49 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
 
   // Check if booking was confirmed via dynamic variables
   // book_service sets booking_confirmed=true in the LLM's dynamic variables
-  const appointmentBooked = dynVars?.booking_confirmed === "true";
-  const appointmentDateTime = dynVars?.appointment_time;
+  let appointmentBooked = dynVars?.booking_confirmed === "true";
+  let appointmentDateTime = dynVars?.appointment_time;
+
+  // Fallback: detect booking from tool call results when dynamic variables are empty.
+  // Retell's collected_dynamic_variables is often empty, but transcript_with_tool_calls
+  // always contains the book_service result with "booked":true and appointment details.
+  if (!appointmentBooked && callData.transcript_with_tool_calls) {
+    for (const entry of callData.transcript_with_tool_calls) {
+      if (entry.role === "tool_call_result" && entry.successful && entry.content) {
+        try {
+          const result = JSON.parse(entry.content);
+          if (result.booked === true) {
+            appointmentBooked = true;
+            if (result.appointment_date && result.appointment_time) {
+              appointmentDateTime = `${result.appointment_date} at ${result.appointment_time}`;
+            }
+            logger.info(
+              { callId: callData.call_id, appointmentDateTime },
+              "Booking detected from tool call result (dynamic variables were empty)"
+            );
+            break;
+          }
+        } catch {
+          // Not JSON or not a booking result - skip
+        }
+      }
+    }
+  }
+
+  // Also extract customer name and address from book_service invocation if not already set
+  if (!customerName || !serviceAddress) {
+    for (const entry of callData.transcript_with_tool_calls || []) {
+      if (entry.role === "tool_call_invocation" && entry.name === "book_service" && entry.arguments) {
+        try {
+          const args = JSON.parse(entry.arguments);
+          if (!customerName && args.customer_name) customerName = args.customer_name;
+          if (!serviceAddress && args.service_address) serviceAddress = args.service_address;
+        } catch {
+          // Not JSON - skip
+        }
+      }
+    }
+  }
 
   // Determine end call reason from Retell's disconnection_reason
   let endCallReason = mapDisconnectionReason(callData.disconnection_reason);
@@ -345,15 +386,9 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     endCallReason = appointmentBooked ? "completed" : "callback_later";
   }
 
-  // Fabrication detection: agent said call was successful but booking never confirmed
-  if (!appointmentBooked && callData.call_analysis?.call_successful === true
-      && callData.disconnection_reason === "agent_hangup") {
-    logger.warn({ callId: callData.call_id },
-      "Possible fabricated booking: call_analysis says successful but booking_confirmed not set");
-  }
-
-  // Infer HVAC issue type from problem description / transcript
-  const hvacIssueType = inferHvacIssueType(problemDescription, callData.transcript);
+  // Infer HVAC issue type from problem description only (not transcript).
+  // The transcript contains safety check "any gas smell?" which falsely matches Odor.
+  const hvacIssueType = inferHvacIssueType(problemDescription);
 
   // Urgency: prefer dynamic variables > custom analysis > inferred from context
   let urgency = mapUrgencyLevelFromAnalysis(dynVars?.urgency_tier || custom?.urgency_level);
@@ -419,10 +454,11 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       "Retell webhook received"
     );
 
-    // Only process post-call events — skip call_started and other lifecycle events
-    // Retell sends multiple event types to the same webhook_url
-    if (event !== "call_ended" && event !== "call_analyzed") {
-      logger.info({ callId, event }, "Skipping non-post-call event");
+    // Only process call_analyzed — it fires after Retell's AI analysis completes
+    // and includes call_summary, sentiment, and custom_analysis_data.
+    // Skipping call_ended prevents duplicate leads (race condition) and null summaries.
+    if (event !== "call_analyzed") {
+      logger.info({ callId, event }, "Skipping non-analyzed event");
       return res.json({ success: true, message: `Skipped event: ${event}` });
     }
 
