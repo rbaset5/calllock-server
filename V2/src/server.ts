@@ -260,8 +260,12 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
   const customerName = dynVars?.customer_name || custom?.customer_name;
   const serviceAddress = dynVars?.service_address || custom?.service_address
     || extractAddressFromTranscript(callData.transcript);
-  const problemDescription = dynVars?.problem_description || dynVars?.problem_summary
-    || custom?.problem_description || callData.call_analysis?.call_summary;
+  // Prefer detailed descriptions; fall back to call_summary when dynamic vars are vague
+  const dynProblem = dynVars?.problem_description || dynVars?.problem_summary;
+  const callSummary = callData.call_analysis?.call_summary;
+  const problemDescription = dynProblem && dynProblem.length >= 30
+    ? dynProblem
+    : callSummary || dynProblem || custom?.problem_description;
 
   // Check if booking was confirmed via dynamic variables
   // book_service sets booking_confirmed=true in the LLM's dynamic variables

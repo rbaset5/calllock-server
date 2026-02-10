@@ -1,11 +1,11 @@
 # AGENT STATUS
 
-- Version: v8-returning-callers (11-state) — patched Feb 9 2026 (v41)
+- Version: v8-returning-callers (11-state) — patched Feb 9 2026 (v57)
 - Previous: v7-ux-refined (8-state)
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
-- Retell Phone Number Version: 41 (bound to +13126463816)
-- Retell Published Version: 41
+- Retell Phone Number Version: 57 (bound to +13126463816)
+- Retell Published Version: 57
 - Agent Name: CallSeal - 8 State v6
 - Deployment status: LIVE — comprehensive fix Feb 9 2026
 - Backchannel: Enabled (frequency 0.6)
@@ -13,6 +13,27 @@
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
 - Config file: retell-llm-v8-returning-callers.json
+
+## Feb 9 Patch #5 (v57) — Anti-Fabrication Booking Guard
+
+Fix from call_f59a05d3858fa4664a04b2bafc1 analysis (Carl's fake booking):
+- Agent said "I'll get that scheduled for Thursday at 10:30 AM" but NEVER called book_service
+- current_agent_state was stuck at "discovery" — agent never progressed past it
+- Zero tool calls in transcript — entire booking was fabricated
+
+### Voice Agent Changes:
+- **A7: Discovery anti-fabrication rule** — Explicit prohibition against saying 'scheduled', 'booked', 'confirmed', 'finalized', or 'locked in' in discovery state. Caller's preferred time must be stored and transitioned to urgency, not acted on.
+- **A8: General rule 13** — Global anti-fabrication rule: "The ONLY way an appointment is booked is through the book_service tool returning booked: true."
+- **A9: Urgency state time handling** — When caller gives specific time, transition to pre_confirm IMMEDIATELY without saying the time is 'available' or 'confirmed' — calendar hasn't been checked yet.
+
+### Dashboard Changes:
+- **D1: Call type includes call_summary/sentiment** — Added missing fields to Call TypeScript interface
+- **D2: AI Summary card on call detail page** — Shows Retell's call_summary between header and Call Details
+- **D3: Sentiment badge** — Displayed in header area next to outcome badge (green/gray/red)
+- **D4: Revenue tier badge fix** — Fixed broken `replace(/\$/g, '').length` logic that mapped $$$$/$$$ to 'diagnostic'. Now correctly counts $ signs.
+
+### Backend Changes:
+- **B5: Smart problem_description fallback** — When dynamic vars problem_summary is < 30 chars (vague), prefer Retell's call_analysis.call_summary instead
 
 ## Feb 9 Patch #4 (v41) — Comprehensive 14-Issue Fix
 
