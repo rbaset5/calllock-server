@@ -39,6 +39,23 @@ import {
 } from "./validation/schemas.js";
 
 // ===========================================
+// Test Phone Masking (toggle via MASK_TEST_PHONES env var)
+// ===========================================
+
+const MASK_TEST_PHONES = process.env.MASK_TEST_PHONES === "true";
+const TEST_PHONE_NUMBERS = new Set(["+12488841980", "+12487391087"]);
+
+/** Replace test phone numbers with a random +1555XXXXXXX number (when enabled) */
+function maskTestPhone(phone: string | undefined): string | undefined {
+  if (!phone || !MASK_TEST_PHONES) return phone;
+  if (TEST_PHONE_NUMBERS.has(phone)) {
+    const rand = Math.floor(1_000_000 + Math.random() * 9_000_000);
+    return `+1555${rand}`;
+  }
+  return phone;
+}
+
+// ===========================================
 // Startup Validation
 // ===========================================
 
@@ -299,9 +316,10 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
   const dynVars = callData.collected_dynamic_variables;
 
   // Extract phone from caller ID based on call direction
-  const customerPhone = callData.direction === "inbound"
+  const rawPhone = callData.direction === "inbound"
     ? callData.from_number
     : callData.to_number;
+  const customerPhone = maskTestPhone(rawPhone);
 
   // Prefer dynamic variables (LLM state during call) > custom analysis > regex fallback
   const customerName = dynVars?.customer_name || custom?.customer_name;
@@ -510,7 +528,11 @@ async function getOrCreateWebhookState(call: RetellFunctionWebhook["call"]): Pro
 
   // Determine call direction and customer phone from caller ID
   const direction = call.direction || (call.from_number ? "inbound" : "outbound");
-  const customerPhone = direction === "inbound" ? call.from_number : call.to_number;
+  const rawPhone = direction === "inbound" ? call.from_number : call.to_number;
+  const customerPhone = maskTestPhone(rawPhone);
+  if (customerPhone !== rawPhone) {
+    logger.info({ callId, originalMasked: true }, "Test phone masked for QA — treating as new caller");
+  }
 
   const newState: ConversationState = {
     callId,
