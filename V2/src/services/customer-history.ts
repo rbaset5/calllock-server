@@ -369,7 +369,7 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
   // 3. Get jobs from Supabase (past and upcoming bookings)
   const jobs = await supabaseQuery<JobRecord>(
     "jobs",
-    `customer_phone=eq.${encodeURIComponent(normalizedPhone)}&order=scheduled_at.desc.nulls.last&limit=5`
+    `customer_phone=eq.${encodeURIComponent(normalizedPhone)}&order=scheduled_at.desc.nullslast&limit=5`
   );
 
   if (jobs && jobs.length > 0) {
