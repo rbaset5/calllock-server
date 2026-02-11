@@ -86,16 +86,19 @@ export async function lookupBookingByPhone(phone: string): Promise<LookupResult>
     const data = (await response.json()) as { data?: CalBooking[] };
     const bookings: CalBooking[] = data.data || [];
 
-    // Find booking matching this phone number
-    const matchingBooking = bookings.find((booking) => {
-      return booking.attendees?.some((attendee) => {
-        const attendeePhone = attendee.phone?.replace(/\D/g, "") || "";
-        return (
-          attendeePhone.includes(normalizedPhone) ||
-          normalizedPhone.includes(attendeePhone)
-        );
-      });
-    });
+    // Find all bookings matching this phone number, sorted soonest-first
+    const matchingBookings = bookings
+      .filter((booking) => {
+        return booking.attendees?.some((attendee) => {
+          const attendeePhone = attendee.phone?.replace(/\D/g, "") || "";
+          return (
+            attendeePhone.includes(normalizedPhone) ||
+            normalizedPhone.includes(attendeePhone)
+          );
+        });
+      })
+      .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+    const matchingBooking = matchingBookings[0];
 
     if (matchingBooking) {
       const startDate = new Date(matchingBooking.start);
