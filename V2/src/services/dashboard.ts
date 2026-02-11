@@ -81,6 +81,11 @@ export interface DashboardJobPayload {
   decision_maker_contact?: string;
   // V6: HVAC Smart Tag Taxonomy (117 tags across 9 categories)
   tags?: TaxonomyTags;
+  // V9: Property manager / third-party caller fields
+  site_contact_name?: string;
+  site_contact_phone?: string;
+  is_third_party?: boolean;
+  third_party_type?: string;
 }
 
 /**
@@ -243,6 +248,11 @@ export function transformToDashboardPayload(
     decision_maker_contact: state.decisionMakerContact,
     // V6: HVAC Smart Tag Taxonomy
     tags: tags,
+    // V9: Property manager / third-party caller
+    site_contact_name: state.siteContactName,
+    site_contact_phone: state.siteContactPhone,
+    is_third_party: state.isThirdParty,
+    third_party_type: state.thirdPartyType,
   };
 }
 

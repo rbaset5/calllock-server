@@ -284,6 +284,13 @@ export interface ConversationState {
   equipmentAgeBracket?: "under_10" | "10_to_15" | "over_15" | "unknown";  // Age bracket for revenue tier
   isDecisionMaker?: boolean;         // Is caller authorized to approve work
   decisionMakerContact?: string;     // Contact info if caller isn't decision maker
+  // V9: Callback flavor (billing, warranty, estimate, service, follow_up, general)
+  callbackType?: "service" | "billing" | "warranty" | "estimate" | "follow_up" | "general";
+  // V9: Property manager / third-party caller fields
+  siteContactName?: string;          // On-site contact name (when caller is PM/landlord)
+  siteContactPhone?: string;         // On-site contact phone
+  isThirdParty?: boolean;            // Caller is PM/landlord calling on behalf of tenant
+  thirdPartyType?: string;           // "property_manager", "landlord", etc.
   appointmentBooked: boolean;
   appointmentId?: string;
   appointmentDateTime?: string;
