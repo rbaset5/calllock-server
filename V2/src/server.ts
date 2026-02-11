@@ -323,6 +323,18 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
 
   // Prefer dynamic variables (LLM state during call) > custom analysis > regex fallback
   let customerName = dynVars?.customer_name || custom?.customer_name;
+
+  // Ghost lead recovery: mine transcript for caller name when dynamic vars are empty
+  if (!customerName && callData.transcript) {
+    const nameMatch = callData.transcript.match(
+      /(?:my name is|this is|it's|i'm)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i
+    );
+    if (nameMatch) {
+      customerName = nameMatch[1];
+      logger.info({ callId: callData.call_id, minedName: customerName }, "Mined caller name from transcript");
+    }
+  }
+
   let serviceAddress = dynVars?.service_address || custom?.service_address
     || extractAddressFromTranscript(callData.transcript);
   // Prefer detailed descriptions; fall back to call_summary when dynamic vars are vague
@@ -422,6 +434,8 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     isUrgentEscalation: false,
     // End call reason from disconnection
     endCallReason,
+    // V9: Detect property manager / third-party caller from transcript
+    isThirdParty: /property manag|landlord|on behalf of|calling for my tenant/i.test(callData.transcript || ""),
   };
 }
 
@@ -495,6 +509,27 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
           "Setting end call reason from agent_hangup fallback"
         );
       }
+    }
+
+    // Ghost lead detection: log abandoned calls for observability
+    const callDuration = payload.call.end_timestamp && payload.call.start_timestamp
+      ? (payload.call.end_timestamp - payload.call.start_timestamp) / 1000
+      : 0;
+    if (
+      payload.call.disconnection_reason === "user_hangup" &&
+      !conversationState.appointmentBooked &&
+      callDuration > 10
+    ) {
+      logger.info(
+        {
+          callId,
+          duration: callDuration,
+          customerName: conversationState.customerName,
+          customerPhone: conversationState.customerPhone,
+          problemDescription: conversationState.problemDescription,
+        },
+        "Ghost lead detected - abandoned call with partial data"
+      );
     }
 
     // Send to dashboard (job/lead)
@@ -892,6 +927,7 @@ app.post("/webhook/retell/send_sales_lead_alert", async (req: Request, res: Resp
     });
 
     // Track sales lead in state
+    state.endCallReason = "sales_lead";
     state.customerName = args.customer_name as string | undefined;
     state.customerPhone = args.customer_phone as string;
     state.serviceAddress = args.address as string | undefined;
@@ -1140,11 +1176,13 @@ app.post("/webhook/retell/create_callback", async (req: Request, res: Response) 
 
     const reason = (args.reason as string) || "Customer requested callback";
     const urgency = (args.urgency as string) || "normal";
+    const callbackType = (args.callback_type as string) || "service";
 
-    logger.info({ callId: state.callId, reason, urgency }, "create_callback called");
+    logger.info({ callId: state.callId, reason, urgency, callbackType }, "create_callback called");
 
     // Update state with callback request
     state.endCallReason = "callback_later";
+    state.callbackType = callbackType as ConversationState["callbackType"];
     if (args.customer_name) state.customerName = args.customer_name as string;
     if (args.issue_description) state.problemDescription = args.issue_description as string;
 
@@ -1152,8 +1190,9 @@ app.post("/webhook/retell/create_callback", async (req: Request, res: Response) 
 
     // Send immediate SMS notification to business owner
     try {
+      const typeLabel = callbackType !== "service" ? `${callbackType.toUpperCase()} callback` : "Callback requested";
       await sendEmergencyAlert({
-        urgencyDescription: `Callback requested: ${reason}`,
+        urgencyDescription: `${typeLabel}: ${reason}`,
         callerPhone: state.customerPhone || "Unknown",
         address: state.serviceAddress || "Not provided",
         callbackMinutes: urgency === "urgent" ? 30 : 60,

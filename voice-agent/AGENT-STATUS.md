@@ -1,18 +1,72 @@
 # AGENT STATUS
 
-- Version: v8-returning-callers (11-state) — patched Feb 10 2026 (v67)
-- Previous: v8-returning-callers (v65)
+- Version: v9-triage (13-state) — deployed Feb 11 2026 (v71)
+- Previous: v8-returning-callers (v67)
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
-- Retell Phone Number Version: 67 (bound to +13126463816)
-- Retell Published Version: 67
+- Retell Phone Number Version: 71 (bound to +13126463816)
+- Retell Published Version: 71
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: LIVE — premature hangup fix Feb 10 2026
+- Deployment status: LIVE — v9 triage + high-ticket + PM logic
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
-- Config file: retell-llm-v8-returning-callers.json
+- Config file: retell-llm-v9-triage.json
+
+## v9 Triage Release (v71) — 5-Feature Upgrade (Feb 11 2026)
+
+Major release adding 5 features across 3 tiers. 13 states (up from 11).
+
+### Feature 1: High-Ticket Sales Lead Detection
+- Discovery state detects replacement/quote/estimate keywords → sets `lead_type="high_ticket"`
+- Urgency state routes high-ticket leads to comfort advisor callback (NEVER books diagnostic)
+- `send_sales_lead_alert` tool added to urgency state for immediate SMS to owner
+- Backend: `send_sales_lead_alert` handler now sets `endCallReason = "sales_lead"` for proper dashboard status
+
+### Feature 2: Ghost Lead Recovery (Backend Only)
+- `extractStateFromPostCallData()` mines transcript for caller name ("my name is X")
+- Ghost lead logging: abandoned calls (user_hangup + no booking + >10s) are explicitly logged
+- Existing pipeline already creates RED priority leads for abandoned calls — no voice agent changes needed
+
+### Feature 3: Early Intent Triage
+- **New state: `non_service`** — handles billing/warranty, vendors, job applicants, pricing inquiries
+- Welcome state expanded with non-service intent detection (billing, vendor, applicant, pricing keywords)
+- New edge: welcome → non_service (skips safety/service_area/discovery entirely)
+- Billing/warranty → create_callback_request → end_call (no safety question)
+- Vendors → polite decline → end_call
+- Job applicants → email redirect → end_call
+- Pricing → $89 diagnostic answer + offer to schedule → safety (if yes) / end_call (if no)
+
+### Feature 4: Callback Type Flavoring
+- `callback_type` parameter added to `create_callback_request` tool in non_service, urgency, follow_up states
+- Values: billing, warranty, estimate, service, follow_up, general
+- Backend: SMS formatted as "BILLING callback: ..." instead of generic "Callback requested: ..."
+- Dashboard: maps to `call_subtype` field (already exists)
+
+### Feature 5: Property Manager / Landlord Logic
+- Discovery state detects PM/landlord language → asks "Will you be at the property?"
+- Captures `site_contact_name` and `site_contact_phone` for on-site coordination
+- Booking state appends site contact to issue_description
+- Backend: `isThirdParty` detection from transcript, new ConversationState fields
+- Dashboard: `site_contact_name/phone` passed through to leads/jobs tables
+
+### Backend Changes (V2 — requires Render deploy)
+- `server.ts`: sales_lead endCallReason, transcript name mining, ghost lead logging, callback_type, PM detection
+- `types/retell.ts`: callbackType, siteContact*, isThirdParty fields on ConversationState
+- `dashboard.ts`: site_contact_name/phone, is_third_party, third_party_type in payload
+
+### Dashboard Changes (requires Vercel deploy)
+- `webhook-schemas.ts`: site_contact_name, site_contact_phone added
+- `webhook/jobs/route.ts`: passes site contact fields through at all 4 insert/update points
+- Migration `0030_site_contact_fields.sql`: adds columns to leads and jobs tables
+
+### Deploy Status
+- [x] Voice agent v9 deployed to Retell (v71)
+- [x] Phone number re-bound to v71
+- [ ] V2 backend deployed to Render
+- [ ] Dashboard deployed to Vercel
+- [ ] DB migration 0030 applied
 
 ## Feb 10 Patch #11 (v67) — Premature Hangup Fix
 
@@ -203,11 +257,22 @@ Fixes from call_34883974e5d7ef5804ba49ce98c analysis:
 - **Booking management**: reschedule, cancel, or status check via `manage_appointment` tool
 - **Intent switching**: any branch can exit into new-issue flow with pre-filled data
 
-## State Flow
+## State Flow (v9 — 13 states)
 
 ### New caller / new issue:
 ```
 welcome → lookup → safety → service_area → discovery → urgency → pre_confirm → booking → confirm
+```
+
+### Non-service caller (billing, vendor, applicant, pricing):
+```
+welcome → non_service → (callback or end_call)
+welcome → non_service → safety (if pricing caller says "yes, schedule me")
+```
+
+### High-ticket sales lead (replacement/quote/estimate):
+```
+welcome → lookup → safety → service_area → discovery → urgency → (sales alert + callback) → end_call
 ```
 
 ### Known caller with new issue (fast-track):
@@ -226,21 +291,23 @@ welcome → lookup → follow_up → (resolve or → safety flow)
 welcome → lookup → manage_booking → confirm (or → safety flow for new issue)
 ```
 
-## Testing Status
+## Testing Status (v9)
 
 | # | State | Type | Status |
 |---|---|---|---|
-| 1 | welcome | Core | Untested |
-| 2 | lookup | NEW | Untested |
-| 3 | follow_up | NEW | Untested |
-| 4 | manage_booking | NEW | Untested |
-| 5 | safety | Core | Untested |
-| 6 | service_area | Modified | Untested |
-| 7 | discovery | Modified | Untested |
-| 8 | urgency | Core | Untested |
-| 9 | pre_confirm | Core | Untested |
-| 10 | booking | Core | Untested |
-| 11 | confirm | Modified | Untested |
+| 1 | welcome | Modified (new intents) | Untested |
+| 2 | non_service | NEW | Untested |
+| 3 | lookup | Core | Untested |
+| 4 | follow_up | Modified (callback_type) | Untested |
+| 5 | manage_booking | Core | Untested |
+| 6 | safety | Core | Untested |
+| 7 | service_area | Core | Untested |
+| 8 | discovery | Modified (high-ticket + PM) | Untested |
+| 9 | urgency | Modified (sales lead path) | Untested |
+| 10 | pre_confirm | Core | Untested |
+| 11 | booking | Modified (site contact) | Untested |
+| 12 | booking_failed | Core | Untested |
+| 13 | confirm | Core | Untested |
 
 ## New Tools
 
@@ -249,24 +316,36 @@ welcome → lookup → manage_booking → confirm (or → safety flow for new is
 | lookup_caller | V2: /webhook/retell/lookup_caller | Auto-lookup caller by phone at call start |
 | manage_appointment | V2: /webhook/retell/manage_appointment | Reschedule, cancel, or status check |
 
-## Test Scenarios (v8)
+## Test Scenarios (v9)
 
-### Returning Caller Scenarios
-1. Known caller + new issue → name confirmed, ZIP/address skipped
-2. Known caller + follow-up → history acknowledged, callback offered
-3. Known caller + booking management → appointment found, reschedule/cancel works
-4. Known caller + intent switch → start booking mgmt, add new issue mid-call
+### v9 New Scenarios
+1. Billing caller → "I have a billing question" → callback with type=billing, NO safety question
+2. Vendor caller → "I'm a parts supplier" → polite decline, end_call
+3. Job applicant → "Are you hiring?" → email redirect, end_call
+4. Pricing inquiry → "How much do you charge?" → $89 answer + offer to schedule
+5. Pricing → schedule → "yes" → transitions to safety (normal booking flow)
+6. High-ticket lead → "I want a whole new AC system" → comfort advisor callback, NOT diagnostic
+7. High-ticket pushback → caller insists on diagnostic → still callback ("you really want our comfort advisor")
+8. Property manager → "I'm a PM, tenant's AC is out" → asked about site contact → captures name/phone
+9. PM at property → "I'll be there" → proceeds normally, is_third_party=false
 
-### Existing Scenarios (must still pass)
-5. New caller: full flow works unchanged
-6. Safety emergency: 911 flow
-7. Out of area: ZIP rejection
-8. Booking: full booking + pre_confirm flow
+### Returning Caller Scenarios (v8, must still pass)
+10. Known caller + new issue → name confirmed, ZIP/address skipped
+11. Known caller + follow-up → history acknowledged, callback offered
+12. Known caller + booking management → appointment found, reschedule/cancel works
+13. Known caller + intent switch → start booking mgmt, add new issue mid-call
+
+### Core Scenarios (must still pass)
+14. New caller: full flow works unchanged
+15. Safety emergency: 911 flow
+16. Out of area: ZIP rejection
+17. Booking: full booking + pre_confirm flow
 
 ### Edge Cases
-9. Lookup times out → graceful fallback to normal flow
-10. Caller says "my appointment" but has none → offer to schedule
-11. Caller has callback promise but wants to book instead → transition to safety
+18. Lookup times out → graceful fallback to normal flow
+19. Caller says "my appointment" but has none → offer to schedule
+20. Caller has callback promise but wants to book instead → transition to safety
+21. Ambiguous intent (could be billing or service) → defaults to service (lookup)
 
 ## Golden Rules (Calm HVAC Dispatcher — v8 Returning Callers)
 
