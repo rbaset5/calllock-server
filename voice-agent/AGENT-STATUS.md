@@ -1,18 +1,45 @@
 # AGENT STATUS
 
-- Version: v9-triage (13-state) — deployed Feb 11 2026 (v71)
-- Previous: v8-returning-callers (v67)
+- Version: v9-triage (13-state) — deployed Feb 11 2026 (v76)
+- Previous: v9-triage v74
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
-- Retell Phone Number Version: 71 (bound to +13126463816)
-- Retell Published Version: 71
+- Retell Phone Number Version: 76 (bound to +13126463816)
+- Retell Published Version: 76
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: LIVE — v9 triage + high-ticket + PM logic
+- Deployment status: LIVE — v9 triage + return caller fixes
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
 - Config file: retell-llm-v9-triage.json
+
+## Feb 11 Patch #12 (v76) — Return Caller Fixes (Transition Leak, Premature Ending, Garbled Address)
+
+Call `call_b7454c272786915f31c6399378f` (Jonas, 44s) revealed 3 issues with return caller handling.
+
+### Root cause analysis:
+1. **"Transitioning now" spoken aloud** — GPT-4o interpreted state prompt instructions ("Transition to [safety]") as speech, generating "Transitioning now" during `speak_during_transition`. Happened at lookup→safety and safety→service_area edges.
+2. **Premature call ending** — Agent reached service_area, saw Jonas had an existing appointment (Wed Feb 11 @ 3:15 PM), and called end_call with "you're all set" instead of asking what he actually needed. Violated end_call's own restriction (ZIP-out-of-area only) and Rule 11 (BOOKING FIREWALL).
+3. **Garbled address** — Lookup returned `"4599 Mustang or Franklin Road"` from jobs table — ambiguous address stored from a previous call without validation.
+
+### Voice Agent Changes:
+- **general_prompt WORDS TO AVOID**: Added "NEVER say 'Transitioning now', 'Transitioning', 'Let me transition', or any internal process language."
+- **general_prompt Rule 15**: "EXISTING APPOINTMENT ≠ CALLER HANDLED" — having an upcoming appointment does NOT mean the caller's needs are met. ALWAYS continue the flow.
+- **service_area end_call description**: Added "NEVER end the call because the caller has an existing appointment — that is NOT a valid reason to end."
+- **service_area → discovery edge**: Added `service_address` and `customer_name` parameters so return caller data stops getting dropped at handoff.
+- **service_area state prompt**: Added pass-through instruction for `{{service_address}}` and `{{customer_name}}` when transitioning.
+- **book_service tool**: Added `zip_code` parameter so ZIP is captured at booking time.
+- **booking state prompt**: Added `zip_code` to the list of values passed to `book_service`.
+
+### V2 Backend Changes:
+- **customer-history.ts**: Address validation filter — skip addresses containing word "or" (ambiguous alternatives from AI). Agent will ask fresh instead of using garbled data.
+- **server.ts**: Post-call extraction appends `zip_code` from `book_service` args to stored address (e.g., "4210 South Lamar Blvd, 78745") so future lookups can extract ZIP.
+
+### Deploy Status:
+- [x] Voice agent v76 deployed to Retell
+- [x] Phone number re-bound to v76
+- [ ] V2 backend deployed to Render (for address + ZIP fix)
 
 ## v9 Triage Release (v71) — 5-Feature Upgrade (Feb 11 2026)
 
