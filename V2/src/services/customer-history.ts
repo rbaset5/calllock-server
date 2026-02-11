@@ -380,8 +380,11 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
       result.customerName = jobs[0].customer_name;
     }
 
-    // Extract address from most recent job with an address
-    const jobWithAddress = jobs.find((j) => j.customer_address && j.customer_address !== "TBD");
+    // Extract address from most recent job with a valid address
+    // Skip garbled addresses containing " or " (ambiguous alternatives from AI transcription)
+    const jobWithAddress = jobs.find(
+      (j) => j.customer_address && j.customer_address !== "TBD" && !/\bor\b/i.test(j.customer_address)
+    );
     if (jobWithAddress) {
       result.address = jobWithAddress.customer_address;
       // Extract ZIP code from address (5-digit pattern at end)

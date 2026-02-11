@@ -1,5 +1,20 @@
 # OPTIMIZATION LOG
 
+## 2026-02-11 — v76 Return Caller Address Fix
+
+### Problem
+Return callers (e.g., Jonas) were re-asked for ZIP and street address on every call despite being recognized. Three root causes found via call `call_8f4be5a1a3624a0954947d0bb3b`:
+1. `service_area → discovery` edge only passed `zip_code` — `service_address` and `customer_name` were dropped at the handoff
+2. `book_service` tool didn't capture `zip_code`, so no ZIP was stored in the database for future lookups
+3. Garbled addresses like `"4599 Mustang or Franklin Road"` were stored without validation
+
+### Change
+- **Retell LLM**: Added `service_address` + `customer_name` params to `service_area → discovery` edge; added `zip_code` param to `book_service` tool; updated state prompts to pass data through
+- **Backend**: `server.ts` appends ZIP to stored address (e.g., "4210 South Lamar Blvd, 78745"); `customer-history.ts` filters out garbled addresses containing "or"
+
+### Result
+Return callers with clean stored address + ZIP will skip both `service_area` and `discovery` address collection. New bookings will store ZIP alongside address for future lookups.
+
 ## 2026-02-06 — v4 → v5 Persona Transformation
 
 ### Problem
