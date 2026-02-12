@@ -262,8 +262,8 @@ function deriveCallType(
 /**
  * Map Retell's sentiment string to 1-5 numeric score
  */
-function mapSentimentToScore(sentiment?: "positive" | "neutral" | "negative"): number | undefined {
-  switch (sentiment) {
+function mapSentimentToScore(sentiment?: string): number | undefined {
+  switch (sentiment?.toLowerCase()) {
     case "negative": return 2;
     case "neutral": return 3;
     case "positive": return 4;
