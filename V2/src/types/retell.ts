@@ -370,7 +370,7 @@ export interface CustomAnalysisData {
 
 export interface RetellCallAnalysis {
   call_summary?: string;
-  user_sentiment?: "positive" | "neutral" | "negative";
+  user_sentiment?: string;
   call_successful?: boolean;
   custom_analysis_data?: CustomAnalysisData;
 }
