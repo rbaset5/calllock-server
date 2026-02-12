@@ -1,18 +1,36 @@
 # AGENT STATUS
 
-- Version: v9-triage (14-state) — deployed Feb 12 2026 (Patch #17)
-- Previous: v9-triage Patch #16
+- Version: v9-triage (15-state) — deployed Feb 12 2026 (Patch #18)
+- Previous: v9-triage Patch #17
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
 - Retell Phone Number Version: 78 (bound to +13126463816)
 - Retell Published Version: 78
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: LIVE — Patch #17: Booking skip prevention (high-ticket misclassification fix). V2 backend: sentiment_score case sensitivity fix.
+- Deployment status: LIVE — Patch #18: Urgency state split (structural booking-skip fix). 15 states.
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
 - Config file: retell-llm-v9-triage.json
+
+## Feb 12 Patch #18 — Urgency State Split (Structural Booking-Skip Fix)
+
+Call `call_f363ef11dc899c050ced367ec03` (Jonas, 56s) — Patch #17 fixed lead_type misclassification but agent STILL skipped booking. Agent called end_call from urgency without determining timing, without attempting booking, and without calling create_callback_request (violating Rule 16). Prompt-based guards failed again.
+
+### Root Cause:
+end_call tool available in urgency state. LLM preferred end_call over the transition edge to pre_confirm. Same class of bug as Patches #5-#7, #10, #13 — prompt-based guards have 0% success rate for this pattern.
+
+### Structural Fix:
+- **Removed ALL tools from urgency state** — LLM can only route via edges (same pattern as Patch #7)
+- **Added urgency_callback state** (15th state, terminal) — has end_call, create_callback_request, send_sales_lead_alert
+- **Urgency now pure triage** — determine timing, route to pre_confirm (default) or urgency_callback (callbacks only)
+
+### Deploy Status:
+- [x] Voice agent config deployed to Retell LLM (via API PATCH, 15 states)
+- [ ] Test call needed: "broken thermostat" should reach booking
+- [ ] Test call needed: "I need a new AC" should reach urgency_callback
+- [ ] Test call needed: "just call me back" should reach urgency_callback
 
 ## Feb 12 Patch #17 — Booking Skip Prevention + Sentiment Fix
 
