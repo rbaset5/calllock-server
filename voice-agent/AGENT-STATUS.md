@@ -1,18 +1,41 @@
 # AGENT STATUS
 
-- Version: v9-triage (14-state) — deployed Feb 12 2026 (Patch #16)
-- Previous: v9-triage Patch #15c
+- Version: v9-triage (14-state) — deployed Feb 12 2026 (Patch #17)
+- Previous: v9-triage Patch #16
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
 - Retell Phone Number Version: 78 (bound to +13126463816)
 - Retell Published Version: 78
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: LIVE — Patch #16: 5 UX fixes (time mismatch, duplicate booking guard, backward flow prevention, ZIP hallucination). Dashboard deploy needed for duplicate booking backend guard.
+- Deployment status: LIVE — Patch #17: Booking skip prevention (high-ticket misclassification fix). V2 backend: sentiment_score case sensitivity fix.
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
 - Config file: retell-llm-v9-triage.json
+
+## Feb 12 Patch #17 — Booking Skip Prevention + Sentiment Fix
+
+Call `call_80b30d25205a5a3b479a173cd7c` revealed voice agent incorrectly classified "broken thermostat cover" as `high_ticket`, skipping booking flow and forcing a sales callback. Also discovered `sentiment_score` always null due to case sensitivity.
+
+### Root Cause (Agent):
+Discovery state set `lead_type="high_ticket"` for "broken thermostat cover" — a simple repair, not a replacement. This triggered the urgency state's sales lead path (Rule 14), which calls `create_callback_request` instead of transitioning to `pre_confirm` → `booking`.
+
+### Voice Agent Changes:
+1. **Discovery state prompt**: Added explicit negative examples for high-ticket detection — "broken", "not working", "cover", "noise", "leak" are REPAIR indicators, not replacement signals.
+2. **Urgency state prompt**: Added VALIDATION guardrail — before taking the sales lead path, verify `problem_description` actually describes replacement/new equipment, not a repair.
+3. **Discovery → urgency edge**: Tightened `lead_type` parameter description with concrete examples ("broken thermostat = '', I need a new AC = high_ticket") and default-to-empty instruction.
+
+### V2 Backend Changes:
+4. **`mapSentimentToScore()`**: Now calls `.toLowerCase()` before matching. Retell sends "Negative" (title case), function expected "negative" (lowercase).
+5. **`user_sentiment` type**: Widened from `"positive" | "neutral" | "negative"` to `string` for API resilience.
+
+### Deploy Status:
+- [x] Voice agent config deployed to Retell LLM (via API PATCH)
+- [x] V2 backend merged to main (PR #18) — Render deploying
+- [ ] Test call needed: "broken thermostat" should proceed to booking
+- [ ] Test call needed: "new AC system" should route to sales callback
+- [ ] Verify sentiment_score populated on next call
 
 ## Feb 12 Patch #16 — 5 UX Fixes from Call Analysis
 
