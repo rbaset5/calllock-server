@@ -86,6 +86,20 @@ export interface DashboardJobPayload {
   site_contact_phone?: string;
   is_third_party?: boolean;
   third_party_type?: string;
+  // V7 Call Type Classification
+  call_type?: string;
+  call_subtype?: string;
+  call_type_confidence?: "low" | "medium" | "high";
+  is_commercial?: boolean;
+  // V5 Velocity Enhancements
+  sentiment_score?: number;
+  work_type?: "service" | "maintenance" | "install" | "admin";
+  // V3 Triage Engine fields
+  caller_type?: string;
+  primary_intent?: string;
+  // V8 LLM-Generated Display Fields
+  card_headline?: string;
+  card_summary?: string;
 }
 
 /**
@@ -171,6 +185,186 @@ function buildSalesLeadTitle(equipmentType?: string, equipmentAge?: string): str
   return `${equipment} Replacement`;
 }
 
+// =============================================================================
+// V10: Field Derivation Functions
+// =============================================================================
+
+/**
+ * Derive call_type and call_subtype from taxonomy tags and conversation state
+ */
+function deriveCallType(
+  tags: TaxonomyTags | null,
+  state: ConversationState
+): { callType: string; callSubtype?: string; confidence: "low" | "medium" | "high" } {
+  if (!tags) {
+    return { callType: "UNKNOWN", confidence: "low" };
+  }
+
+  // NON_CUSTOMER tags → spam/junk call types
+  if (tags.NON_CUSTOMER.length > 0) {
+    if (tags.NON_CUSTOMER.includes("WRONG_NUMBER")) return { callType: "WRONG_NUMBER", confidence: "high" };
+    if (tags.NON_CUSTOMER.includes("JOB_APPLICANT")) return { callType: "JOB_SEEKER", confidence: "high" };
+    if (tags.NON_CUSTOMER.includes("VENDOR_SALES") || tags.NON_CUSTOMER.includes("SPAM_TELEMARKETING")) {
+      return { callType: "SPAM_JUNK", confidence: "high" };
+    }
+    return { callType: "SPAM_JUNK", callSubtype: tags.NON_CUSTOMER[0]?.toLowerCase(), confidence: "medium" };
+  }
+
+  // SERVICE_TYPE tags → derive primary call type and subtype
+  const serviceTypes = tags.SERVICE_TYPE;
+  if (serviceTypes.length > 0) {
+    const first = serviceTypes[0];
+
+    if (first.startsWith("REPAIR_")) {
+      const subtype = first.replace("REPAIR_", "").toLowerCase();
+      return { callType: "SERVICE", callSubtype: subtype, confidence: "high" };
+    }
+    if (first.startsWith("TUNEUP_") || first === "DUCT_CLEANING" || first === "FILTER_SERVICE") {
+      const subtype = first.replace("TUNEUP_", "").toLowerCase();
+      return { callType: "MAINTENANCE", callSubtype: subtype, confidence: "high" };
+    }
+    if (first.startsWith("INSTALL_")) {
+      const subtype = first.replace("INSTALL_", "").toLowerCase();
+      return { callType: "ESTIMATE", callSubtype: subtype, confidence: "high" };
+    }
+    if (first.startsWith("DIAGNOSTIC_")) {
+      const subtype = first.replace("DIAGNOSTIC_", "").toLowerCase();
+      return { callType: "SERVICE", callSubtype: subtype, confidence: "medium" };
+    }
+    if (first === "SECONDOPINION") return { callType: "ESTIMATE", callSubtype: "second_opinion", confidence: "high" };
+    if (first === "WARRANTY_CLAIM") return { callType: "EXISTING_CUSTOMER", callSubtype: "warranty", confidence: "high" };
+  }
+
+  // RECOVERY tags → complaint-type call
+  if (tags.RECOVERY.length > 0) {
+    return { callType: "COMPLAINT", callSubtype: "follow_up", confidence: "medium" };
+  }
+
+  // CUSTOMER tags → returning or new
+  if (tags.CUSTOMER.includes("EXISTING_CUSTOMER") || tags.CUSTOMER.includes("REPEAT_CALLER")) {
+    return { callType: "RETURNING_CONTACT", confidence: "medium" };
+  }
+  if (tags.CUSTOMER.includes("NEW_CUSTOMER") || tags.CUSTOMER.includes("REFERRAL")) {
+    return { callType: "SERVICE", callSubtype: tags.CUSTOMER.includes("REFERRAL") ? "referral" : "new_customer", confidence: "medium" };
+  }
+
+  // Fallback: use state fields
+  if (state.callbackType === "estimate" || state.endCallReason === "sales_lead") {
+    return { callType: "ESTIMATE", confidence: "low" };
+  }
+  if (state.hvacIssueType) {
+    return { callType: "SERVICE", callSubtype: state.hvacIssueType.toLowerCase(), confidence: "low" };
+  }
+
+  return { callType: "UNKNOWN", confidence: "low" };
+}
+
+/**
+ * Map Retell's sentiment string to 1-5 numeric score
+ */
+function mapSentimentToScore(sentiment?: "positive" | "neutral" | "negative"): number | undefined {
+  switch (sentiment) {
+    case "negative": return 2;
+    case "neutral": return 3;
+    case "positive": return 4;
+    default: return undefined;
+  }
+}
+
+/**
+ * Derive work_type from state and tags
+ */
+function deriveWorkType(
+  state: ConversationState,
+  tags: TaxonomyTags | null
+): "service" | "maintenance" | "install" | "admin" {
+  if (tags) {
+    const st = tags.SERVICE_TYPE;
+    if (st.some(t => t.startsWith("INSTALL_"))) return "install";
+    if (st.some(t => t.startsWith("TUNEUP_") || t === "DUCT_CLEANING" || t === "FILTER_SERVICE")) return "maintenance";
+    if (tags.NON_CUSTOMER.length > 0) return "admin";
+  }
+  if (state.callbackType === "estimate" || state.endCallReason === "sales_lead") return "install";
+  return "service";
+}
+
+/**
+ * Derive caller_type from state and tags
+ */
+function deriveCallerType(
+  state: ConversationState,
+  tags: TaxonomyTags | null
+): "residential" | "commercial" | "vendor" | "recruiting" | "unknown" {
+  if (state.propertyType === "commercial") return "commercial";
+  if (tags) {
+    if (tags.CUSTOMER.includes("COMMERCIAL_ACCT")) return "commercial";
+    if (tags.NON_CUSTOMER.includes("JOB_APPLICANT")) return "recruiting";
+    if (tags.NON_CUSTOMER.includes("VENDOR_SALES") || tags.NON_CUSTOMER.includes("SPAM_TELEMARKETING")) return "vendor";
+    if (tags.CUSTOMER.length > 0) return "residential";
+  }
+  return "unknown";
+}
+
+/**
+ * Derive primary_intent from state and tags
+ */
+function derivePrimaryIntent(
+  state: ConversationState,
+  tags: TaxonomyTags | null
+): "new_lead" | "active_job_issue" | "booking_request" | "admin_billing" | "solicitation" {
+  if (state.appointmentBooked) return "booking_request";
+  if (tags?.RECOVERY && tags.RECOVERY.length > 0) return "active_job_issue";
+  if (tags?.NON_CUSTOMER && tags.NON_CUSTOMER.length > 0) return "solicitation";
+  if (state.callbackType === "billing" || state.callbackType === "warranty") return "admin_billing";
+  if (state.endCallReason === "sales_lead") return "new_lead";
+  return "new_lead";
+}
+
+/**
+ * Build a short headline for dashboard card display
+ */
+function buildCardHeadline(
+  state: ConversationState,
+  retellData?: RetellPostCallData
+): string | undefined {
+  const summary = retellData?.call_analysis?.call_summary;
+  if (summary) {
+    const firstSentence = summary.split(/[.!?]/)[0]?.trim();
+    if (firstSentence && firstSentence.length > 0) {
+      return firstSentence.length > 60 ? firstSentence.substring(0, 57) + "..." : firstSentence;
+    }
+  }
+  if (state.problemDescription) {
+    return state.problemDescription.length > 60
+      ? state.problemDescription.substring(0, 57) + "..."
+      : state.problemDescription;
+  }
+  return undefined;
+}
+
+/**
+ * Build a summary paragraph for dashboard card display
+ */
+function buildCardSummary(
+  state: ConversationState,
+  retellData?: RetellPostCallData
+): string | undefined {
+  const summary = retellData?.call_analysis?.call_summary;
+  if (summary) {
+    return summary.length > 200 ? summary.substring(0, 197) + "..." : summary;
+  }
+  const parts: string[] = [];
+  if (state.problemDescription) parts.push(state.problemDescription);
+  if (state.urgencyTier === "LifeSafety") parts.push("Life safety emergency.");
+  else if (state.urgencyTier === "Urgent") parts.push("Urgent service needed.");
+  if (state.equipmentType) parts.push(`Equipment: ${state.equipmentType}.`);
+  if (state.equipmentAge) parts.push(`Age: ${state.equipmentAge}.`);
+
+  const combined = parts.join(" ");
+  if (combined.length === 0) return undefined;
+  return combined.length > 200 ? combined.substring(0, 197) + "..." : combined;
+}
+
 /**
  * Transform conversation state to dashboard payload
  */
@@ -186,6 +380,15 @@ export function transformToDashboardPayload(
 
   // V6: Classify call with HVAC Smart Tag Taxonomy
   const tags = classifyCall(state, retellData?.transcript, retellData?.start_timestamp);
+
+  // V10: Derive enrichment fields from tags and state
+  const callTypeResult = deriveCallType(tags, state);
+  const sentimentScore = mapSentimentToScore(retellData?.call_analysis?.user_sentiment);
+  const workType = deriveWorkType(state, tags);
+  const callerType = deriveCallerType(state, tags);
+  const primaryIntent = derivePrimaryIntent(state, tags);
+  const cardHeadline = buildCardHeadline(state, retellData);
+  const cardSummary = buildCardSummary(state, retellData);
 
   // For sales leads, create a descriptive title from equipment info
   const issueDescription = state.endCallReason === "sales_lead"
@@ -205,7 +408,7 @@ export function transformToDashboardPayload(
     customer_phone: (state.customerPhone && state.customerPhone !== "auto" && state.customerPhone !== "TBD")
       ? state.customerPhone
       : phoneFromRetell || "Unknown",
-    customer_address: state.serviceAddress || "Not provided",
+    customer_address: state.serviceAddress || "",
     service_type: "hvac", // Always HVAC for this system
     urgency: mapUrgencyToDashboard(state.urgencyTier, state.endCallReason),
     ai_summary: buildAiSummary(state, retellData),
@@ -253,6 +456,17 @@ export function transformToDashboardPayload(
     site_contact_phone: state.siteContactPhone,
     is_third_party: state.isThirdParty,
     third_party_type: state.thirdPartyType,
+    // V10: Enrichment fields
+    call_type: callTypeResult.callType,
+    call_subtype: callTypeResult.callSubtype,
+    call_type_confidence: callTypeResult.confidence,
+    is_commercial: state.propertyType === "commercial" || tags?.REVENUE?.includes("COMMERCIAL_LEAD") || false,
+    sentiment_score: sentimentScore,
+    work_type: workType,
+    caller_type: callerType,
+    primary_intent: primaryIntent,
+    card_headline: cardHeadline,
+    card_summary: cardSummary,
   };
 }
 
@@ -360,6 +574,9 @@ export interface DashboardCallPayload {
   booking_status?: string;
   caller_type?: string;
   primary_intent?: string;
+  // V10: Call type enrichment
+  call_type?: string;
+  is_commercial?: boolean;
   // Call analysis fields from Retell
   call_summary?: string;
   sentiment?: string;
@@ -424,6 +641,9 @@ export async function sendCallToDashboard(
     priority_reason: priority.reason,
     // V8 Booking status
     booking_status: state.appointmentBooked ? 'confirmed' : 'not_requested',
+    // V10: Call type enrichment
+    call_type: deriveCallType(classifyCall(state, retellData?.transcript, retellData?.start_timestamp), state).callType,
+    is_commercial: state.propertyType === "commercial",
     // Call analysis from Retell's post-call AI
     call_summary: retellData?.call_analysis?.call_summary,
     sentiment: retellData?.call_analysis?.user_sentiment,

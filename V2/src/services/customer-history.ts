@@ -383,7 +383,7 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
     // Extract address from most recent job with a valid address
     // Skip garbled addresses containing " or " (ambiguous alternatives from AI transcription)
     const jobWithAddress = jobs.find(
-      (j) => j.customer_address && j.customer_address !== "TBD" && !/\bor\b/i.test(j.customer_address)
+      (j) => j.customer_address && j.customer_address !== "TBD" && j.customer_address !== "Not provided" && !/\bor\b/i.test(j.customer_address)
     );
     if (jobWithAddress) {
       result.address = jobWithAddress.customer_address;
@@ -391,6 +391,23 @@ export async function getCustomerHistory(phone: string): Promise<CustomerHistory
       const zipMatch = jobWithAddress.customer_address.match(/\b(\d{5})(?:-\d{4})?\b/);
       if (zipMatch) {
         result.zipCode = zipMatch[1];
+      }
+    }
+
+    // Fallback: extract address from upcoming appointment job if no address found yet
+    if (!result.address) {
+      const upcomingJob = jobs.find(
+        (j) => j.scheduled_at && new Date(j.scheduled_at) > new Date() &&
+               j.customer_address && j.customer_address !== "TBD" &&
+               j.customer_address !== "Not provided" &&
+               !/\bor\b/i.test(j.customer_address)
+      );
+      if (upcomingJob) {
+        result.address = upcomingJob.customer_address;
+        const zipMatch = upcomingJob.customer_address.match(/\b(\d{5})(?:-\d{4})?\b/);
+        if (zipMatch) {
+          result.zipCode = zipMatch[1];
+        }
       }
     }
 
