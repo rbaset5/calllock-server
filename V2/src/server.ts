@@ -315,8 +315,10 @@ function inferUrgencyFromContext(problemDesc?: string, transcript?: string): Urg
   if (/gas\s*leak|carbon\s*monoxide|smoke|fire|sparking|flood/i.test(text)) return "Emergency";
   // Urgent indicators
   if (/water\s*leak|leak.*inside|puddle|no\s*(heat|cool|ac|air)|emergency|asap|today|right\s*away/i.test(text)) return "Urgent";
+  // Estimate indicators (check before Routine — "estimate" is lower urgency than routine maintenance)
+  if (/estimate|quote|how\s*much|whenever|no\s*rush|flexible/i.test(text)) return "Estimate";
   // Routine indicators
-  if (/maintenance|tune.?up|estimate|whenever|no\s*rush|this\s*week/i.test(text)) return "Routine";
+  if (/maintenance|tune.?up|this\s*week/i.test(text)) return "Routine";
 
   return "Routine";
 }

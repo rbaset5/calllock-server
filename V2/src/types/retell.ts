@@ -147,7 +147,7 @@ export type HVACIssueType =
   | "Odor" | "Not Running" | "Thermostat";
 
 // Two-tier emergency system + routine
-export type UrgencyTier = "LifeSafety" | "Urgent" | "Routine";
+export type UrgencyTier = "LifeSafety" | "Urgent" | "Routine" | "Estimate";
 
 // Legacy urgency level for calendar availability
 export type UrgencyLevel = "Emergency" | "Urgent" | "Routine" | "Estimate";

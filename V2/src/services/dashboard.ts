@@ -125,6 +125,8 @@ function mapUrgencyToDashboard(
       return "high";
     case "Routine":
       return "medium";
+    case "Estimate":
+      return "low";
     default:
       return "low";
   }
@@ -380,6 +382,11 @@ export function transformToDashboardPayload(
 
   // V6: Classify call with HVAC Smart Tag Taxonomy
   const tags = classifyCall(state, retellData?.transcript, retellData?.start_timestamp);
+
+  // Warn if no tags were classified (#14)
+  if (Object.values(tags).every(arr => arr.length === 0)) {
+    log.warn({ callId: state.callId }, "No taxonomy tags classified for call");
+  }
 
   // V10: Derive enrichment fields from tags and state
   const callTypeResult = deriveCallType(tags, state);
