@@ -225,6 +225,13 @@ function incrementStateVisit(state: ConversationState, toolName: string): boolea
 }
 
 // ============================================
+// Retell Webhook Auth (must be before all /webhook/retell routes)
+// ============================================
+
+// ALL Retell webhooks must be authenticated
+app.use("/webhook/retell", retellWebhookAuth);
+
+// ============================================
 // Retell Post-Call Webhook (Dashboard Integration)
 // ============================================
 
@@ -654,9 +661,6 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
 // Webhooks for Retell Built-in LLM Tool Calls
 // Each function has its own endpoint
 // ============================================
-
-// ALL Retell webhooks must be authenticated
-app.use("/webhook/retell", retellWebhookAuth);
 
 interface RetellFunctionWebhook {
   call: {
