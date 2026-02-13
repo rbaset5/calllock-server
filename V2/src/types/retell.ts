@@ -147,7 +147,7 @@ export type HVACIssueType =
   | "Odor" | "Not Running" | "Thermostat";
 
 // Two-tier emergency system + routine
-export type UrgencyTier = "LifeSafety" | "Urgent" | "Routine";
+export type UrgencyTier = "LifeSafety" | "Urgent" | "Routine" | "Estimate";
 
 // Legacy urgency level for calendar availability
 export type UrgencyLevel = "Emergency" | "Urgent" | "Routine" | "Estimate";
@@ -186,6 +186,7 @@ export interface BookAppointmentParams {
 
 export interface BookAppointmentResult {
   success: boolean;
+  booking_confirmed: boolean;
   appointmentId?: string;
   confirmationMessage: string;
 }
@@ -298,6 +299,8 @@ export interface ConversationState {
   lastAgentState?: string;          // Last agent state for dead-end call detection
   isSafetyEmergency: boolean;
   isUrgentEscalation: boolean;
+  // V11: State loop guardrails (#19)
+  stateVisitCounter?: Record<string, number>;
 }
 
 // ============================================

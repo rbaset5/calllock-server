@@ -125,6 +125,8 @@ function mapUrgencyToDashboard(
       return "high";
     case "Routine":
       return "medium";
+    case "Estimate":
+      return "low";
     default:
       return "low";
   }
@@ -366,6 +368,30 @@ function buildCardSummary(
 }
 
 /**
+ * Extract equipment type from transcript using keyword matching (#22)
+ */
+function extractEquipmentTypeFromTranscript(transcript?: string): string | undefined {
+  if (!transcript) return undefined;
+  const text = transcript.toLowerCase();
+
+  const patterns: [RegExp, string][] = [
+    [/\b(air\s*condition(?:er|ing)?|a\.?c\.?\s*unit|central\s*air)\b/i, "AC"],
+    [/\b(furnace|heater)\b/i, "furnace"],
+    [/\b(heat\s*pump)\b/i, "heat pump"],
+    [/\b(boiler)\b/i, "boiler"],
+    [/\b(thermostat)\b/i, "thermostat"],
+    [/\b(mini[\s-]*split|ductless)\b/i, "mini-split"],
+    [/\b(water\s*heater|hot\s*water)\b/i, "water heater"],
+    [/\b(duct(?:work)?|air\s*duct)\b/i, "ductwork"],
+  ];
+
+  for (const [regex, type] of patterns) {
+    if (regex.test(text)) return type;
+  }
+  return undefined;
+}
+
+/**
  * Transform conversation state to dashboard payload
  */
 export function transformToDashboardPayload(
@@ -388,6 +414,11 @@ export function transformToDashboardPayload(
 
   // V6: Classify call with HVAC Smart Tag Taxonomy
   const tags = classifyCall(state, retellData?.transcript, retellData?.start_timestamp);
+
+  // Warn if no tags were classified (#14)
+  if (Object.values(tags).every(arr => arr.length === 0)) {
+    log.warn({ callId: state.callId }, "No taxonomy tags classified for call");
+  }
 
   // V10: Derive enrichment fields from tags and state
   const callTypeResult = deriveCallType(tags, state);
@@ -438,7 +469,7 @@ export function transformToDashboardPayload(
     end_call_reason: state.endCallReason,
     issue_description: issueDescription,
     // Sales lead specific fields
-    equipment_type: state.equipmentType,
+    equipment_type: state.equipmentType || extractEquipmentTypeFromTranscript(retellData?.transcript) || "unknown",
     equipment_age: state.equipmentAge,
     sales_lead_notes: state.salesLeadNotes,
     // Diagnostic context fields
