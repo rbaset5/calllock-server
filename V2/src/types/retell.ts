@@ -295,6 +295,7 @@ export interface ConversationState {
   appointmentId?: string;
   appointmentDateTime?: string;
   endCallReason?: EndCallReason;
+  lastAgentState?: string;          // Last agent state for dead-end call detection
   isSafetyEmergency: boolean;
   isUrgentEscalation: boolean;
 }

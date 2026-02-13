@@ -372,8 +372,16 @@ export function transformToDashboardPayload(
   state: ConversationState,
   retellData?: RetellPostCallData
 ): DashboardJobPayload {
-  // Calculate revenue estimate
-  const estimate = estimateRevenue(state);
+  // Extract user-only speech from structured transcript for revenue keyword matching.
+  // Avoids false positives from agent questions (e.g. "any gas smell?") while
+  // capturing the customer's actual words like "replace the furnace".
+  const userSpeech = retellData?.transcript_object
+    ?.filter(msg => msg.role === "user")
+    .map(msg => msg.content)
+    .join(" ") || "";
+
+  // Calculate revenue estimate (with user transcript for keyword detection)
+  const estimate = estimateRevenue(state, userSpeech);
 
   // Detect priority color for V4 dashboard
   const priority = detectPriority(state, retellData?.transcript, estimate);
