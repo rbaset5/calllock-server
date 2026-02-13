@@ -845,24 +845,64 @@
               "issue_description"
             ]
           }
-        },
-        {
-          "type": "end_call",
-          "name": "end_call",
-          "description": "End the call ONLY if book_service returned no available slots AND the caller declines a callback. In all other cases, proceed to confirm or booking_failed."
         }
       ],
       "interruption_sensitivity": 0.7
     },
     {
       "name": "booking_failed",
-      "state_prompt": "## State: BOOKING_FAILED\n\nThe booking attempt was made but did not succeed (no slots available or tool error).\n\n## Your Job\nOffer the caller a callback and close the call warmly.\n\nSay: \"I'm sorry — I wasn't able to lock in that time. Let me have someone from the team call you back to get you scheduled. Sound good?\"\n\n### If yes:\n\"Perfect — they'll reach out shortly. Thanks for calling ACE Cooling.\"\n→ end_call\n\n### If no:\n\"No problem — you can call us back anytime. Thanks for calling ACE Cooling.\"\n→ end_call",
+      "state_prompt": "## State: BOOKING_FAILED\n\nThe booking attempt was made but did not succeed (no slots available or tool error).\n\nREQUIRED: Call create_callback_request BEFORE calling end_call. The caller must have a callback created so the team can follow up.\n\n## Your Job\nOffer the caller a callback, create it, then close the call warmly.\n\nSay: \"I'm sorry — I wasn't able to lock in that time. Let me have someone from the team call you back to get you scheduled. Sound good?\"\n\n### If yes:\n→ Call create_callback_request with reason describing the failed booking and callback_type: \"service\"\n→ After the tool returns, read its message: \"Perfect — they'll reach out shortly. Thanks for calling ACE Cooling.\"\n→ end_call\n\n### If no:\n\"No problem — you can call us back anytime. Thanks for calling ACE Cooling.\"\n→ end_call\n\n## CRITICAL RULES\n- ALWAYS call create_callback_request when the caller agrees to a callback\n- NEVER end the call without offering a callback first\n- The create_callback_request tool ACTUALLY notifies the team via SMS — without it, no one follows up",
       "edges": [],
       "tools": [
         {
+          "headers": {},
+          "parameter_type": "json",
+          "method": "POST",
+          "query_params": {},
+          "description": "Create a callback request after a failed booking. This notifies the team via SMS to call the customer back with available times.",
+          "type": "custom",
+          "url": "https://calllock-server.onrender.com/webhook/retell/create_callback",
+          "args_at_root": false,
+          "timeout_ms": 8000,
+          "speak_after_execution": true,
+          "name": "create_callback_request",
+          "response_variables": {},
+          "execution_message": "Let me get that set up for you...",
+          "speak_during_execution": true,
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string",
+                "description": "Why the customer wants a callback (booking failed — no available slots)"
+              },
+              "issue_description": {
+                "type": "string",
+                "description": "Brief description of the HVAC issue they called about"
+              },
+              "callback_type": {
+                "type": "string",
+                "description": "Always 'service' for failed booking callbacks"
+              },
+              "customer_name": {
+                "type": "string",
+                "description": "Customer's name if known"
+              },
+              "urgency": {
+                "type": "string",
+                "description": "'urgent' if same-day request, 'normal' otherwise"
+              }
+            },
+            "required": [
+              "reason",
+              "callback_type"
+            ]
+          }
+        },
+        {
           "type": "end_call",
           "name": "end_call",
-          "description": "End the call after offering the caller a callback following a failed booking attempt."
+          "description": "End the call ONLY AFTER calling create_callback_request. Never end the call without creating the callback first."
         }
       ],
       "interruption_sensitivity": 0.8
