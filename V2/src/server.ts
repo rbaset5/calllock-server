@@ -693,11 +693,13 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
     logger.info({ callId: state.callId, args }, "book_appointment called");
 
     const bookingUrgency = (args.urgency as string) || "Routine";
+    // Use agent-collected address, fall back to state passthrough from lookup (#18)
+    const serviceAddress = (args.service_address as string) || state.serviceAddress || "TBD";
     const result = await bookAppointment({
       dateTime: args.date_time as string,
       customerName: args.customer_name as string | undefined,
       customerPhone: args.customer_phone as string,
-      serviceAddress: args.service_address as string,
+      serviceAddress,
       serviceType: "HVAC",
       urgency: bookingUrgency as UrgencyLevel,
       problemDescription: args.problem_description as string,
@@ -977,6 +979,10 @@ app.post("/webhook/retell/lookup_caller", async (req: Request, res: Response) =>
     if (result.customerName && !state.customerName) {
       state.customerName = result.customerName;
     }
+    // Store address in state passthrough (not visible to agent) (#18 privacy)
+    if (result.address) {
+      state.serviceAddress = result.address;
+    }
     if (result.found) {
       await saveCallSession(state);
     }
@@ -993,7 +999,10 @@ app.post("/webhook/retell/lookup_caller", async (req: Request, res: Response) =>
       "lookup_caller completed"
     );
 
-    return res.json(result);
+    // Strip street address from agent-visible response (#18 privacy)
+    // Keep zipCode — needed for service area validation, not a privacy concern
+    const { address, ...agentVisibleResult } = result;
+    return res.json(agentVisibleResult);
   } catch (error) {
     logger.error({ error }, "lookup_caller failed");
     // Graceful fallback — don't block the call if lookup fails
