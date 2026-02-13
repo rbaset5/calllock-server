@@ -9,6 +9,7 @@ import { fetchWithRetry, FetchError } from "../utils/fetch.js";
 import { estimateRevenue, RevenueEstimate } from "./revenue-estimation.js";
 import { detectPriority, PriorityColor } from "./priority-detection.js";
 import { classifyCall, TaxonomyTags } from "./tag-classifier.js";
+import { mapUrgencyToDashboard } from "../classification/call-type.js";
 
 const log = createModuleLogger("dashboard");
 
@@ -102,35 +103,7 @@ export interface DashboardJobPayload {
   card_summary?: string;
 }
 
-/**
- * Map urgency tier to dashboard urgency level
- */
-function mapUrgencyToDashboard(
-  urgencyTier?: UrgencyTier,
-  endCallReason?: EndCallReason
-): DashboardJobPayload["urgency"] {
-  // Safety emergencies are always highest priority
-  if (endCallReason === "safety_emergency") {
-    return "emergency";
-  }
-
-  if (endCallReason === "urgent_escalation") {
-    return "high";
-  }
-
-  switch (urgencyTier) {
-    case "LifeSafety":
-      return "emergency";
-    case "Urgent":
-      return "high";
-    case "Routine":
-      return "medium";
-    case "Estimate":
-      return "low";
-    default:
-      return "low";
-  }
-}
+// mapUrgencyToDashboard moved to classification/call-type.ts
 
 /**
  * Build AI summary from conversation state and end reason
@@ -449,7 +422,7 @@ export function transformToDashboardPayload(
       : phoneFromRetell || "Unknown",
     customer_address: state.serviceAddress || "",
     service_type: "hvac", // Always HVAC for this system
-    urgency: mapUrgencyToDashboard(state.urgencyTier, state.endCallReason),
+    urgency: mapUrgencyToDashboard({ urgencyTier: state.urgencyTier, urgencyLevel: state.urgency, endCallReason: state.endCallReason }),
     ai_summary: buildAiSummary(state, retellData),
     scheduled_at: state.appointmentDateTime,
     call_transcript: retellData?.transcript,
