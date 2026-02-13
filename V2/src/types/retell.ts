@@ -186,6 +186,7 @@ export interface BookAppointmentParams {
 
 export interface BookAppointmentResult {
   success: boolean;
+  booking_confirmed: boolean;
   appointmentId?: string;
   confirmationMessage: string;
 }
