@@ -72,7 +72,8 @@ async function supabaseRequest<T>(
   table: string,
   method: "GET" | "POST" | "PATCH",
   data?: Record<string, unknown>,
-  filters?: string
+  filters?: string,
+  options?: { upsert?: boolean }
 ): Promise<T | null> {
   if (!isSupabaseConfigured) {
     return null;
@@ -89,7 +90,9 @@ async function supabaseRequest<T>(
           apikey: SUPABASE_ANON_KEY!,
           Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
           "Content-Type": "application/json",
-          Prefer: method === "POST" ? "return=representation" : "return=minimal",
+          Prefer: method === "POST"
+            ? (options?.upsert ? "return=representation,resolution=merge-duplicates" : "return=representation")
+            : "return=minimal",
         },
         body: data ? JSON.stringify(data) : undefined,
       },
@@ -253,7 +256,7 @@ export async function saveCallSession(state: ConversationState): Promise<void> {
     synced_to_dashboard: false,
   };
 
-  await supabaseRequest("call_sessions", "POST", record as unknown as Record<string, unknown>);
+  await supabaseRequest("call_sessions", "POST", record as unknown as Record<string, unknown>, undefined, { upsert: true });
   log.info({ callId: state.callId }, "Call session saved for post-call processing");
 }
 
