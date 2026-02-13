@@ -38,6 +38,7 @@ import {
   phoneSchema,
 } from "./validation/schemas.js";
 import { inferUrgencyFromContext } from "./extraction/urgency.js";
+import { extractCustomerName, extractSafetyEmergency } from "./extraction/post-call.js";
 
 // ===========================================
 // Test Phone Masking (toggle via MASK_TEST_PHONES env var)
@@ -332,12 +333,10 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
   let customerName = dynVars?.customer_name || custom?.customer_name;
 
   // Ghost lead recovery: mine transcript for caller name when dynamic vars are empty
+  // Uses extractCustomerName which filters agent utterances to avoid capturing agent's name
   if (!customerName && callData.transcript) {
-    const nameMatch = callData.transcript.match(
-      /(?:my name is|this is|it's|i'm)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i
-    );
-    if (nameMatch) {
-      customerName = nameMatch[1];
+    customerName = extractCustomerName(callData.transcript);
+    if (customerName) {
       logger.info({ callId: callData.call_id, minedName: customerName }, "Mined caller name from transcript");
     }
   }
@@ -441,7 +440,7 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     callDirection: callData.direction,
     appointmentBooked,
     appointmentDateTime,
-    isSafetyEmergency: false,
+    isSafetyEmergency: extractSafetyEmergency(callData.transcript),
     isUrgentEscalation: false,
     // End call reason from disconnection
     endCallReason,
