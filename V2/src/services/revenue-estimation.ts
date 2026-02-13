@@ -209,7 +209,7 @@ function buildResult(
  * 5. Maintenance signals (tune-up, filter)
  * 6. Fallback to diagnostic if unclear
  */
-export function estimateRevenue(state: ConversationState): RevenueEstimate {
+export function estimateRevenue(state: ConversationState, transcript?: string): RevenueEstimate {
   const signals: string[] = [];
 
   // Combine all text sources for keyword matching
@@ -217,6 +217,7 @@ export function estimateRevenue(state: ConversationState): RevenueEstimate {
     state.problemDescription || "",
     state.equipmentType || "",
     state.salesLeadNotes || "",
+    transcript || "",  // User-only transcript speech for replacement keyword detection
   ].join(" ").toLowerCase();
 
   // Parse equipment age
