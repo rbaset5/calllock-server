@@ -210,6 +210,21 @@ app.post("/api/bookings/reschedule", async (req: Request, res: Response) => {
 });
 
 // ============================================
+// State Loop Guardrails (#19)
+// ============================================
+
+/**
+ * Increment state visit counter and return true if limit exceeded (> 3 visits)
+ */
+function incrementStateVisit(state: ConversationState, toolName: string): boolean {
+  if (!state.stateVisitCounter) {
+    state.stateVisitCounter = {};
+  }
+  state.stateVisitCounter[toolName] = (state.stateVisitCounter[toolName] || 0) + 1;
+  return state.stateVisitCounter[toolName] > 3;
+}
+
+// ============================================
 // Retell Post-Call Webhook (Dashboard Integration)
 // ============================================
 
@@ -692,6 +707,9 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
 
     logger.info({ callId: state.callId, args }, "book_appointment called");
 
+    // Loop guard (#19)
+    const shouldForceTransition = incrementStateVisit(state, "book_appointment");
+
     const bookingUrgency = (args.urgency as string) || "Routine";
     // Use agent-collected address, fall back to state passthrough from lookup (#18)
     const serviceAddress = (args.service_address as string) || state.serviceAddress || "TBD";
@@ -730,7 +748,7 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
     }
 
     logger.info({ callId: state.callId, latencyMs: Date.now() - startTime, booked: result.success }, "book_appointment completed");
-    return res.json(result);
+    return res.json({ ...result, force_transition: shouldForceTransition });
   } catch (error) {
     logger.error({ error }, "book_appointment failed");
     return res.status(500).json({ error: "Tool execution failed" });
@@ -973,6 +991,9 @@ app.post("/webhook/retell/lookup_caller", async (req: Request, res: Response) =>
 
     logger.info({ callId: state.callId, phone: maskPhone(phone) }, "lookup_caller called");
 
+    // Loop guard (#19)
+    const shouldForceTransition = incrementStateVisit(state, "lookup_caller");
+
     const result = await getCustomerHistory(phone);
 
     // Update state with customer info if found
@@ -1002,7 +1023,7 @@ app.post("/webhook/retell/lookup_caller", async (req: Request, res: Response) =>
     // Strip street address from agent-visible response (#18 privacy)
     // Keep zipCode — needed for service area validation, not a privacy concern
     const { address, ...agentVisibleResult } = result;
-    return res.json(agentVisibleResult);
+    return res.json({ ...agentVisibleResult, force_transition: shouldForceTransition });
   } catch (error) {
     logger.error({ error }, "lookup_caller failed");
     // Graceful fallback — don't block the call if lookup fails
@@ -1193,6 +1214,9 @@ app.post("/webhook/retell/create_callback", async (req: Request, res: Response) 
 
     logger.info({ callId: state.callId, reason, urgency, callbackType }, "create_callback called");
 
+    // Loop guard (#19)
+    const shouldForceTransition = incrementStateVisit(state, "create_callback");
+
     // Update state with callback request
     state.endCallReason = "callback_later";
     state.callbackType = callbackType as ConversationState["callbackType"];
@@ -1218,6 +1242,7 @@ app.post("/webhook/retell/create_callback", async (req: Request, res: Response) 
     logger.info({ callId: state.callId, latencyMs: Date.now() - startTime }, "create_callback completed");
     return res.json({
       success: true,
+      force_transition: shouldForceTransition,
       message: urgency === "urgent"
         ? "Done — I've flagged this as urgent. Someone from the team will reach out as soon as possible."
         : "Done — I've passed this along to the team. They'll reach out as soon as possible.",

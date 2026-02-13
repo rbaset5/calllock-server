@@ -298,6 +298,8 @@ export interface ConversationState {
   endCallReason?: EndCallReason;
   isSafetyEmergency: boolean;
   isUrgentEscalation: boolean;
+  // V11: State loop guardrails (#19)
+  stateVisitCounter?: Record<string, number>;
 }
 
 // ============================================
