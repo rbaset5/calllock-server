@@ -39,6 +39,7 @@ import {
 } from "./validation/schemas.js";
 import { inferUrgencyFromContext } from "./extraction/urgency.js";
 import { extractCustomerName, extractSafetyEmergency } from "./extraction/post-call.js";
+import { incrementStateVisit, isStateLooping } from "./state/conversation-state.js";
 
 // ===========================================
 // Test Phone Masking (toggle via MASK_TEST_PHONES env var)
@@ -211,20 +212,7 @@ app.post("/api/bookings/reschedule", async (req: Request, res: Response) => {
   res.json(result);
 });
 
-// ============================================
-// State Loop Guardrails (#19)
-// ============================================
-
-/**
- * Increment state visit counter and return true if limit exceeded (> 3 visits)
- */
-function incrementStateVisit(state: ConversationState, toolName: string): boolean {
-  if (!state.stateVisitCounter) {
-    state.stateVisitCounter = {};
-  }
-  state.stateVisitCounter[toolName] = (state.stateVisitCounter[toolName] || 0) + 1;
-  return state.stateVisitCounter[toolName] > 3;
-}
+// incrementStateVisit and isStateLooping moved to state/conversation-state.ts
 
 // ============================================
 // Retell Webhook Auth (must be before all /webhook/retell routes)
@@ -763,7 +751,8 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
     logger.info({ callId: state.callId, args }, "book_appointment called");
 
     // Loop guard (#19)
-    const shouldForceTransition = incrementStateVisit(state, "book_appointment");
+    incrementStateVisit(state, "book_appointment");
+    const shouldForceTransition = isStateLooping(state, "book_appointment");
 
     const bookingUrgency = (args.urgency as string) || "Routine";
     // Use agent-collected address, fall back to state passthrough from lookup (#18)
@@ -1047,7 +1036,8 @@ app.post("/webhook/retell/lookup_caller", async (req: Request, res: Response) =>
     logger.info({ callId: state.callId, phone: maskPhone(phone) }, "lookup_caller called");
 
     // Loop guard (#19)
-    const shouldForceTransition = incrementStateVisit(state, "lookup_caller");
+    incrementStateVisit(state, "lookup_caller");
+    const shouldForceTransition = isStateLooping(state, "lookup_caller");
 
     const result = await getCustomerHistory(phone);
 
@@ -1274,7 +1264,8 @@ app.post("/webhook/retell/create_callback", async (req: Request, res: Response) 
     logger.info({ callId: state.callId, reason, urgency, callbackType }, "create_callback called");
 
     // Loop guard (#19)
-    const shouldForceTransition = incrementStateVisit(state, "create_callback");
+    incrementStateVisit(state, "create_callback");
+    const shouldForceTransition = isStateLooping(state, "create_callback");
 
     // Update state with callback request
     state.endCallReason = "callback_later";
