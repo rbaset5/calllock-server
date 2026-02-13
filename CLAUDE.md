@@ -230,3 +230,50 @@ supabase db push
 ```
 
 Or run SQL in Supabase Dashboard (migration 0023).
+
+---
+
+## Development Discipline (Effective 2026-02-13)
+
+> **Read `docs/plans/2026-02-13-mvp-stabilization-design.md` before starting ANY work.**
+> This is the approved stabilization plan. Do not deviate without explicit approval.
+
+### Hard Rules
+
+1. **No merging without passing tests.** Every PR must have vitest passing in CI.
+2. **One branch per issue.** Never reuse a branch for multiple PRs.
+3. **No batch deploys.** Deploy one PR at a time. Verify it works before merging the next.
+4. **No new features until stabilization is complete.** The plan has 3 phases. Features come after Phase 3.
+5. **Bug fixes require a failing test first.** Write the test that reproduces the bug, then fix it.
+6. **No bypassing auth.** The webhook auth middleware must block invalid signatures. Never call `next()` on auth failure.
+
+### V2 Backend Module Structure (Target — Phase 2)
+
+After Phase 2, `server.ts` is decomposed into:
+
+```
+V2/src/
+  server.ts                    # Express setup, middleware, health checks (~200 lines)
+  webhooks/retell-handler.ts   # Route registration, request/response
+  state/conversation-state.ts  # State persistence, loop detection
+  tools/lookup-caller.ts       # lookup_caller webhook logic
+  tools/book-appointment.ts    # book_appointment webhook logic
+  tools/create-callback.ts     # create_callback webhook logic
+  extraction/post-call.ts      # Post-call data extraction
+  extraction/urgency.ts        # Urgency inference
+  classification/tags.ts       # 117-tag taxonomy
+  classification/call-type.ts  # Call type + urgency tier mapping
+  classification/revenue.ts    # Revenue estimation
+  sync/job-sync.ts             # Dashboard job webhook
+  sync/call-sync.ts            # Dashboard call webhook
+  sync/alert-sync.ts           # Emergency alert webhook
+  transformation/payload.ts    # Dashboard payload construction
+```
+
+### Known Architectural Decisions
+
+- **Urgency field:** Use `state.urgency` (UrgencyLevel) as the source of truth. Map it to `urgencyTier` in `classification/call-type.ts` for dashboard consumption. Never read `state.urgencyTier` directly.
+- **Webhook secrets:** Use `DASHBOARD_WEBHOOK_SECRET` everywhere. The `WEBHOOK_SECRET` variable in `alerts.ts` is a bug (tracked in stabilization plan).
+- **Dashboard URLs:** Use separate environment variables for each webhook URL (`DASHBOARD_JOBS_URL`, `DASHBOARD_CALLS_URL`, `DASHBOARD_ALERTS_URL`). Do not derive URLs via string replacement.
+- **State persistence:** Always use upsert (not insert) for `call_sessions`. The `Prefer: resolution=merge-duplicates` header is required.
+- **Customer name extraction:** Filter agent utterances before applying name regex. The transcript contains both agent and caller speech.
