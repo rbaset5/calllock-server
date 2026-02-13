@@ -8,7 +8,7 @@ import { createModuleLogger, maskPhone } from "../utils/logger.js";
 import { fetchWithRetry, FetchError } from "../utils/fetch.js";
 import { estimateRevenue, RevenueEstimate } from "./revenue-estimation.js";
 import { detectPriority, PriorityColor } from "./priority-detection.js";
-import { classifyCall, TaxonomyTags } from "./tag-classifier.js";
+import { classifyCall, TaxonomyTags } from "../classification/tags.js";
 import { mapUrgencyToDashboard } from "../classification/call-type.js";
 
 const log = createModuleLogger("dashboard");
