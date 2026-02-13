@@ -17,7 +17,7 @@ const EMERGENCY_SMS_NUMBER = process.env.EMERGENCY_SMS_NUMBER;
 
 // Dashboard webhook for SMS context (for reply tracking)
 const DASHBOARD_WEBHOOK_URL = process.env.DASHBOARD_WEBHOOK_URL;
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+const DASHBOARD_WEBHOOK_SECRET = process.env.DASHBOARD_WEBHOOK_SECRET;
 
 // Reply code instructions for SMS
 const REPLY_INSTRUCTIONS = "Reply: 1=Called 2=VM 3=Note 4=Booked 5=Lost";
@@ -256,7 +256,7 @@ async function saveAlertContextToDashboard(params: {
   customerPhone: string;
   customerName?: string;
 }): Promise<void> {
-  if (!DASHBOARD_WEBHOOK_URL || !WEBHOOK_SECRET || !EMERGENCY_SMS_NUMBER) {
+  if (!DASHBOARD_WEBHOOK_URL || !DASHBOARD_WEBHOOK_SECRET || !EMERGENCY_SMS_NUMBER) {
     log.info("Dashboard webhook not configured - skipping context save");
     return;
   }
@@ -270,7 +270,7 @@ async function saveAlertContextToDashboard(params: {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Webhook-Secret": WEBHOOK_SECRET,
+          "X-Webhook-Secret": DASHBOARD_WEBHOOK_SECRET,
         },
         body: JSON.stringify({
           operator_phone: EMERGENCY_SMS_NUMBER,
