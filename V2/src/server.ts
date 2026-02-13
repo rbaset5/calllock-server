@@ -8,8 +8,6 @@ import {
   RetellPostCallWebhook,
   RetellPostCallData,
   UrgencyLevel,
-  EndCallReason,
-  HVACIssueType,
 } from "./types/retell.js";
 import {
   lookupBookingByPhone,
@@ -37,6 +35,16 @@ import {
   rescheduleRequestSchema,
   phoneSchema,
 } from "./validation/schemas.js";
+import { inferUrgencyFromContext } from "./extraction/urgency.js";
+import {
+  extractCustomerName,
+  extractSafetyEmergency,
+  mapUrgencyLevelFromAnalysis,
+  extractAddressFromTranscript,
+  mapDisconnectionReason,
+} from "./extraction/post-call.js";
+import { incrementStateVisit, isStateLooping } from "./state/conversation-state.js";
+import { inferHvacIssueType } from "./extraction/hvac-issue.js";
 
 // ===========================================
 // Test Phone Masking (toggle via MASK_TEST_PHONES env var)
@@ -209,20 +217,7 @@ app.post("/api/bookings/reschedule", async (req: Request, res: Response) => {
   res.json(result);
 });
 
-// ============================================
-// State Loop Guardrails (#19)
-// ============================================
-
-/**
- * Increment state visit counter and return true if limit exceeded (> 3 visits)
- */
-function incrementStateVisit(state: ConversationState, toolName: string): boolean {
-  if (!state.stateVisitCounter) {
-    state.stateVisitCounter = {};
-  }
-  state.stateVisitCounter[toolName] = (state.stateVisitCounter[toolName] || 0) + 1;
-  return state.stateVisitCounter[toolName] > 3;
-}
+// incrementStateVisit and isStateLooping moved to state/conversation-state.ts
 
 // ============================================
 // Retell Webhook Auth (must be before all /webhook/retell routes)
@@ -235,100 +230,11 @@ app.use("/webhook/retell", retellWebhookAuth);
 // Retell Post-Call Webhook (Dashboard Integration)
 // ============================================
 
-/**
- * Map urgency level string from post-call analysis to UrgencyLevel type
- */
-function mapUrgencyLevelFromAnalysis(urgencyLevel?: string): UrgencyLevel | undefined {
-  if (!urgencyLevel) return undefined;
-  const normalized = urgencyLevel.toLowerCase();
-  if (normalized.includes("emergency")) return "Emergency";
-  if (normalized.includes("urgent")) return "Urgent";
-  if (normalized.includes("routine")) return "Routine";
-  if (normalized.includes("estimate")) return "Estimate";
-  return undefined;
-}
+// mapUrgencyLevelFromAnalysis, extractAddressFromTranscript, mapDisconnectionReason
+// moved to extraction/post-call.ts
+// inferHvacIssueType moved to extraction/hvac-issue.ts
 
-/**
- * Extract address from transcript using regex (fallback when custom analysis unavailable)
- */
-function extractAddressFromTranscript(transcript?: string): string | undefined {
-  if (!transcript) return undefined;
-  const addressMatch = transcript.match(
-    /(\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Court|Ct|Lane|Ln|Way|Boulevard|Blvd)[,\s]+[\w\s]+,?\s*(?:Texas|TX)?\s*\d{5})/i
-  );
-  return addressMatch ? addressMatch[1].trim() : undefined;
-}
-
-/**
- * Map Retell's disconnection_reason to our EndCallReason
- * Retell uses reasons like: "user_hangup", "agent_hangup", "call_transfer", "voicemail", "inactivity", etc.
- */
-function mapDisconnectionReason(reason?: string): EndCallReason | undefined {
-  if (!reason) return undefined;
-
-  const lowered = reason.toLowerCase();
-
-  // Customer hung up before conversation completed
-  if (lowered.includes("user_hangup") || lowered.includes("customer_hangup") || lowered === "hangup") {
-    return "customer_hangup";
-  }
-
-  // Call went to voicemail - treat as callback_later (they need to call back)
-  if (lowered.includes("voicemail")) {
-    return "callback_later";
-  }
-
-  // Other reasons don't map to our specific end call reasons
-  return undefined;
-}
-
-/**
- * Infer HVAC issue type from problem description and transcript
- * Used as a fallback when the voice agent doesn't set hvacIssueType
- */
-function inferHvacIssueType(problemDesc?: string, transcript?: string): HVACIssueType | undefined {
-  const text = [problemDesc, transcript].filter(Boolean).join(" ").toLowerCase();
-  if (!text) return undefined;
-
-  // Water/leak patterns
-  if (/water\s*(leak|puddle|drip|pool)|leak.*unit|puddle.*inside|dripping/i.test(text)) return "Leaking";
-  // Cooling patterns
-  if (/not?\s*cool|ac\s*(not|isn|won)|no\s*(cold|cool)|warm\s*air|won.t\s*cool/i.test(text)) return "No Cool";
-  // Heating patterns
-  if (/not?\s*heat|no\s*heat|furnace\s*(not|won|isn)|cold\s*air.*heat|won.t\s*heat/i.test(text)) return "No Heat";
-  // Noise patterns
-  if (/noise|loud|bang|rattle|squeal|grind|vibrat/i.test(text)) return "Noisy System";
-  // Smell patterns
-  if (/smell|odor|musty|mold/i.test(text)) return "Odor";
-  // Not running
-  if (/won.t\s*(start|turn|run)|not\s*(start|turn|run)|dead|no\s*power/i.test(text)) return "Not Running";
-  // Thermostat
-  if (/thermostat|temperature.*wrong|temp.*off/i.test(text)) return "Thermostat";
-  // Maintenance
-  if (/maintenance|tune.?up|check.?up|seasonal|filter/i.test(text)) return "Maintenance";
-
-  return undefined;
-}
-
-/**
- * Infer urgency from problem description and transcript
- * Used as a fallback when the voice agent doesn't set urgency_tier
- */
-function inferUrgencyFromContext(problemDesc?: string, transcript?: string): UrgencyLevel | undefined {
-  const text = [problemDesc, transcript].filter(Boolean).join(" ").toLowerCase();
-  if (!text) return undefined;
-
-  // Emergency indicators
-  if (/gas\s*leak|carbon\s*monoxide|smoke|fire|sparking|flood/i.test(text)) return "Emergency";
-  // Urgent indicators
-  if (/water\s*leak|leak.*inside|puddle|no\s*(heat|cool|ac|air)|emergency|asap|today|right\s*away/i.test(text)) return "Urgent";
-  // Estimate indicators (check before Routine — "estimate" is lower urgency than routine maintenance)
-  if (/estimate|quote|how\s*much|whenever|no\s*rush|flexible/i.test(text)) return "Estimate";
-  // Routine indicators
-  if (/maintenance|tune.?up|this\s*week/i.test(text)) return "Routine";
-
-  return "Routine";
-}
+// inferUrgencyFromContext moved to extraction/urgency.ts
 
 /**
  * Extract conversation state from post-call webhook data
@@ -349,12 +255,10 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
   let customerName = dynVars?.customer_name || custom?.customer_name;
 
   // Ghost lead recovery: mine transcript for caller name when dynamic vars are empty
+  // Uses extractCustomerName which filters agent utterances to avoid capturing agent's name
   if (!customerName && callData.transcript) {
-    const nameMatch = callData.transcript.match(
-      /(?:my name is|this is|it's|i'm)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i
-    );
-    if (nameMatch) {
-      customerName = nameMatch[1];
+    customerName = extractCustomerName(callData.transcript);
+    if (customerName) {
       logger.info({ callId: callData.call_id, minedName: customerName }, "Mined caller name from transcript");
     }
   }
@@ -458,7 +362,7 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     callDirection: callData.direction,
     appointmentBooked,
     appointmentDateTime,
-    isSafetyEmergency: false,
+    isSafetyEmergency: extractSafetyEmergency(callData.transcript),
     isUrgentEscalation: false,
     // End call reason from disconnection
     endCallReason,
@@ -781,7 +685,8 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
     logger.info({ callId: state.callId, args }, "book_appointment called");
 
     // Loop guard (#19)
-    const shouldForceTransition = incrementStateVisit(state, "book_appointment");
+    incrementStateVisit(state, "book_appointment");
+    const shouldForceTransition = isStateLooping(state, "book_appointment");
 
     const bookingUrgency = (args.urgency as string) || "Routine";
     // Use agent-collected address, fall back to state passthrough from lookup (#18)
@@ -1065,7 +970,8 @@ app.post("/webhook/retell/lookup_caller", async (req: Request, res: Response) =>
     logger.info({ callId: state.callId, phone: maskPhone(phone) }, "lookup_caller called");
 
     // Loop guard (#19)
-    const shouldForceTransition = incrementStateVisit(state, "lookup_caller");
+    incrementStateVisit(state, "lookup_caller");
+    const shouldForceTransition = isStateLooping(state, "lookup_caller");
 
     const result = await getCustomerHistory(phone);
 
@@ -1292,7 +1198,8 @@ app.post("/webhook/retell/create_callback", async (req: Request, res: Response) 
     logger.info({ callId: state.callId, reason, urgency, callbackType }, "create_callback called");
 
     // Loop guard (#19)
-    const shouldForceTransition = incrementStateVisit(state, "create_callback");
+    incrementStateVisit(state, "create_callback");
+    const shouldForceTransition = isStateLooping(state, "create_callback");
 
     // Update state with callback request
     state.endCallReason = "callback_later";
