@@ -37,6 +37,7 @@ import {
   rescheduleRequestSchema,
   phoneSchema,
 } from "./validation/schemas.js";
+import { inferUrgencyFromContext } from "./extraction/urgency.js";
 
 // ===========================================
 // Test Phone Masking (toggle via MASK_TEST_PHONES env var)
@@ -310,25 +311,7 @@ function inferHvacIssueType(problemDesc?: string, transcript?: string): HVACIssu
   return undefined;
 }
 
-/**
- * Infer urgency from problem description and transcript
- * Used as a fallback when the voice agent doesn't set urgency_tier
- */
-function inferUrgencyFromContext(problemDesc?: string, transcript?: string): UrgencyLevel | undefined {
-  const text = [problemDesc, transcript].filter(Boolean).join(" ").toLowerCase();
-  if (!text) return undefined;
-
-  // Emergency indicators
-  if (/gas\s*leak|carbon\s*monoxide|smoke|fire|sparking|flood/i.test(text)) return "Emergency";
-  // Urgent indicators
-  if (/water\s*leak|leak.*inside|puddle|no\s*(heat|cool|ac|air)|emergency|asap|today|right\s*away/i.test(text)) return "Urgent";
-  // Estimate indicators (check before Routine — "estimate" is lower urgency than routine maintenance)
-  if (/estimate|quote|how\s*much|whenever|no\s*rush|flexible/i.test(text)) return "Estimate";
-  // Routine indicators
-  if (/maintenance|tune.?up|this\s*week/i.test(text)) return "Routine";
-
-  return "Routine";
-}
+// inferUrgencyFromContext moved to extraction/urgency.ts
 
 /**
  * Extract conversation state from post-call webhook data
