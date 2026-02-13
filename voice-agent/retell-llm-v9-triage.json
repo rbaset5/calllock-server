@@ -257,9 +257,31 @@
       "state_prompt": "## State: FOLLOW_UP\n\nHandle callers who are following up on a previous call or waiting on a callback.\n\n## What You Have\nFrom the lookup result:\n- recent_calls: their call history with dates and outcomes\n- callback_promise: whether we owe them a callback (date + issue)\n- upcoming_appointment: any existing appointment\n- operator_notes: special instructions\n\n## Step 1: Acknowledge Their History\n\n### REPEAT CALLER AWARENESS (CHECK FIRST)\nCount how many recent_calls are from \"today\". If the caller has called 3+ times today:\n→ Lead with empathy (do NOT mention the call count): \"I see you've been trying to reach us — I'm really sorry about that.\"\n→ Ask what they need: \"What are you calling about today — is it the same [previous issue], or something new?\"\n→ If SAME issue or wanting a callback → Call create_callback_request with urgency: \"urgent\"\n→ If NEW issue → \"Got it — let's get that taken care of.\" → [safety]\n→ After the tool returns (if escalated), read its message, then ASK: \"Is there anything else I can help with, or are we good?\"\n→ If they mention another issue → [safety]\n→ If they say no / \"that's it\" / \"thanks\" → end_call\n→ IMPORTANT: Do NOT end_call until the caller confirms they're done. They may have called about something new.\n→ NEVER mention the exact number of times they've called. It feels accusatory.\n\n### If callback_promise exists (and NOT a repeat caller):\n→ \"Yeah, I see your call from [date] about [issue]. Looks like we still owe you a callback on that — I'm sorry about the wait.\"\n\n### If recent calls but no callback promise:\n→ \"I see your call from [date] about [issue]. What can I help with?\"\n\n### If upcoming appointment:\n→ \"I see you've got an appointment coming up — [date] at [time] for [issue]. Are you calling about that, or something else?\"\n\n## Step 2: Handle Their Response\n\n### \"Any update?\" / \"Has anyone looked at it?\" / \"Have them call me\" / \"Send a message\"\n→ Call create_callback_request tool with reason describing what the caller wants.\n→ The tool will confirm the callback and notify the team.\n→ After the tool returns, read its message → end_call.\n\n### \"Just book me in\" / \"Schedule something\"\n→ \"Let's get you on the schedule.\"\n→ [safety] (pre-filled data carries over)\n\n### \"I'm still waiting on that callback\"\n→ \"I hear you — that shouldn't have slipped. Let me flag this as urgent right now.\"\n→ Call create_callback_request with urgency: \"urgent\"\n→ After the tool returns, read its message → end_call.\n\n### Caller mentions a NEW HVAC issue\n→ \"Got it — let's get that taken care of.\"\n→ [safety] (pre-filled data carries over)\n\n### \"Never mind\" / wants to end\n→ \"No problem — call us back anytime.\"\n→ end_call\n\n## CRITICAL: ALWAYS use create_callback_request tool\nWhen the caller wants a callback, you MUST call create_callback_request. Do NOT just say \"I'll arrange that\" — the tool actually notifies the team. Without calling it, nothing happens.\n\n## Rules\n- Be empathetic about unfulfilled callbacks — acknowledge the gap\n- Don't make excuses — just offer to fix it\n- Pre-filled data (name, address, ZIP) carries over if they move to booking flow\n- Keep it brief — follow-up callers want resolution, not small talk\n- NEVER mention exact call counts — say \"you've been trying to reach us\" instead\n- For repeat callers (3+ calls today), always ask what they're calling about before escalating, then ask if there's anything else before ending",
       "edges": [
         {
-          "description": "Caller wants to schedule new service or mentions a new HVAC issue",
+          "description": "Caller wants to schedule new service or mentions a new HVAC issue. Pass pre-filled caller data for downstream states.",
           "speak_during_transition": true,
-          "destination_state_name": "safety"
+          "destination_state_name": "safety",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "zip_code": {
+                "type": "string",
+                "description": "ZIP code from lookup, or empty string if unknown. Pass EXACTLY as received."
+              },
+              "service_address": {
+                "type": "string",
+                "description": "Service address from lookup, or empty string if unknown. Pass EXACTLY as received."
+              },
+              "customer_name": {
+                "type": "string",
+                "description": "Caller's name from lookup, or empty string if unknown."
+              }
+            },
+            "required": [
+              "zip_code",
+              "service_address",
+              "customer_name"
+            ]
+          }
         }
       ],
       "tools": [
@@ -320,14 +342,53 @@
       "state_prompt": "## State: MANAGE_BOOKING\n\nHandle reschedule, cancel, or status check on an existing appointment.\n\n## What You Have\nFrom the lookup result:\n- upcoming_appointment: { date, time, issue, jobId }\n- customer_name: their name (confirmed in lookup)\n\n## Step 1: Confirm the Appointment\n\"I see your appointment — [date] at [time] for [issue]. What do you need?\"\n\nIf they didn't specify what they want, ask: \"Are you looking to reschedule, cancel, or just checking on it?\"\n\n## Step 2: Handle Their Request\n\n### RESCHEDULE\n→ \"Sure — when works better for you?\"\n→ Wait for their preferred time\n→ Call manage_appointment with action: \"reschedule\", new_time: [their preference]\n→ If success: Read the response message → [confirm]\n→ If conflict/unavailable: Offer the available_slots from the response\n→ When they pick a slot, call manage_appointment again\n\n### CANCEL\n→ Check if appointment is today or tomorrow:\n  - If same-day/tomorrow: \"Just to confirm — you want to cancel your [day] appointment?\"\n  - If further out: proceed directly\n→ Call manage_appointment with action: \"cancel\"\n→ \"Done — it's cancelled. Call us back anytime if you need to reschedule.\"\n→ end_call\n\n### STATUS CHECK (\"Is it still on?\" / \"Just checking\")\n→ Call manage_appointment with action: \"status\"\n→ Read the response message\n→ \"Anything else I can help with?\"\n→ If no: end_call\n\n### NEW ISSUE (\"Also my other unit is broken\")\n→ \"Got it — want me to schedule someone for that too?\"\n→ If yes: → [safety] (pre-filled data carries over)\n→ If no: \"No problem.\" → end_call\n\n## Rules\n- Only confirm before cancelling if the appointment is today or tomorrow\n- For reschedule conflicts, offer alternatives from the tool response\n- Pre-filled data carries over if they move to the new-issue flow\n- Keep responses brief — they know what they want",
       "edges": [
         {
-          "description": "Appointment managed successfully (rescheduled or status checked) — wrap up",
-          "speak_during_transition": false,
-          "destination_state_name": "confirm"
+          "description": "Appointment managed successfully (rescheduled or status checked) — wrap up with confirmation details.",
+          "speak_during_transition": true,
+          "destination_state_name": "confirm",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "appointment_time": {
+                "type": "string",
+                "description": "The confirmed appointment date and time after reschedule or status check"
+              },
+              "action_taken": {
+                "type": "string",
+                "description": "What was done: 'rescheduled', 'status_checked', or 'no_change'"
+              }
+            },
+            "required": [
+              "appointment_time",
+              "action_taken"
+            ]
+          }
         },
         {
-          "description": "Caller mentions a NEW HVAC issue or wants to schedule additional service",
+          "description": "Caller mentions a NEW HVAC issue or wants to schedule additional service. Pass pre-filled caller data for downstream states.",
           "speak_during_transition": true,
-          "destination_state_name": "safety"
+          "destination_state_name": "safety",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "zip_code": {
+                "type": "string",
+                "description": "ZIP code from lookup, or empty string if unknown. Pass EXACTLY as received."
+              },
+              "service_address": {
+                "type": "string",
+                "description": "Service address from lookup, or empty string if unknown. Pass EXACTLY as received."
+              },
+              "customer_name": {
+                "type": "string",
+                "description": "Caller's name from lookup, or empty string if unknown."
+              }
+            },
+            "required": [
+              "zip_code",
+              "service_address",
+              "customer_name"
+            ]
+          }
         }
       ],
       "tools": [
