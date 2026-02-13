@@ -436,6 +436,8 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     endCallReason,
     // V9: Detect property manager / third-party caller from transcript
     isThirdParty: /property manag|landlord|on behalf of|calling for my tenant/i.test(callData.transcript || ""),
+    // Last agent state for dead-end call detection
+    lastAgentState: dynVars?.current_agent_state,
   };
 }
 
@@ -511,6 +513,48 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       }
     }
 
+    // Always capture lastAgentState from post-call data (saved sessions don't track this)
+    if (!conversationState.lastAgentState && payload.call.collected_dynamic_variables?.current_agent_state) {
+      conversationState.lastAgentState = payload.call.collected_dynamic_variables.current_agent_state;
+    }
+
+    // Detect bookings made via Retell's built-in Cal.com tool (book_appointment_cal).
+    // The built-in tool doesn't fire a webhook to V2, so saved sessions have
+    // appointmentBooked=false. Check post-call data for booking evidence.
+    if (!conversationState.appointmentBooked) {
+      // Check 1: Dynamic variables (Retell may set booking_confirmed)
+      const postCallDynVars = payload.call.collected_dynamic_variables;
+      if (postCallDynVars?.booking_confirmed === "true") {
+        conversationState.appointmentBooked = true;
+        conversationState.appointmentDateTime = postCallDynVars.appointment_time;
+        conversationState.endCallReason = "completed";
+        logger.info({ callId }, "Booking detected from dynamic variables (saved session)");
+      }
+
+      // Check 2: Tool call results (scan for booked:true in any tool response)
+      if (!conversationState.appointmentBooked && payload.call.transcript_with_tool_calls) {
+        for (const entry of payload.call.transcript_with_tool_calls) {
+          if (entry.role === "tool_call_result" && entry.successful && entry.content) {
+            try {
+              const result = JSON.parse(entry.content);
+              if (result.booked === true) {
+                conversationState.appointmentBooked = true;
+                if (result.appointment_date && result.appointment_time) {
+                  conversationState.appointmentDateTime =
+                    `${result.appointment_date} at ${result.appointment_time}`;
+                }
+                conversationState.endCallReason = "completed";
+                logger.info({ callId }, "Booking detected from tool call results (saved session)");
+                break;
+              }
+            } catch {
+              // Not JSON or not a booking result — skip
+            }
+          }
+        }
+      }
+    }
+
     // Ghost lead detection: log abandoned calls for observability
     const callDuration = payload.call.end_timestamp && payload.call.start_timestamp
       ? (payload.call.end_timestamp - payload.call.start_timestamp) / 1000
@@ -530,6 +574,29 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
         },
         "Ghost lead detected - abandoned call with partial data"
       );
+    }
+
+    // Dead-end call detection: agent hung up at a scheduling state without booking or callback
+    const lastState = conversationState.lastAgentState
+      || payload.call.collected_dynamic_variables?.current_agent_state;
+    const deadEndStates = ["urgency", "pre_confirm", "booking"];
+    if (
+      payload.call.disconnection_reason === "agent_hangup" &&
+      !conversationState.appointmentBooked &&
+      lastState && deadEndStates.includes(lastState)
+    ) {
+      logger.warn(
+        { callId, lastState, customerName: conversationState.customerName },
+        "Dead-end call detected — reached scheduling without booking"
+      );
+      // Ensure end call reason reflects the dead-end (not generic callback_later)
+      if (!conversationState.endCallReason || conversationState.endCallReason === "callback_later") {
+        conversationState.endCallReason = "callback_later";
+      }
+      // Flag urgency so dashboard gives RED priority to dead-end calls
+      if (!conversationState.urgency || conversationState.urgency === "Routine") {
+        conversationState.urgency = "Urgent";
+      }
     }
 
     // Send to dashboard (job/lead)
@@ -969,10 +1036,11 @@ app.post("/webhook/retell/lookup_caller", async (req: Request, res: Response) =>
 
     const result = await getCustomerHistory(phone);
 
-    // Update state with customer info if found
-    if (result.customerName && !state.customerName) {
-      state.customerName = result.customerName;
-    }
+    // Don't carry forward prior caller data into session state.
+    // Each call should extract fresh customer data from its own conversation.
+    // The lookup result is returned to the AI agent for conversational context
+    // only — it must NOT contaminate the webhook payload with stale data
+    // (e.g. Person A's name when Person B calls from the same phone).
     if (result.found) {
       await saveCallSession(state);
     }
