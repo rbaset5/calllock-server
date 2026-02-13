@@ -375,7 +375,7 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     }
   }
 
-  // Also extract customer name and address from book_service invocation if not already set
+  // Also extract customer name, address, and ZIP from book_service invocation if not already set
   if (!customerName || !serviceAddress) {
     for (const entry of callData.transcript_with_tool_calls || []) {
       if (entry.role === "tool_call_invocation" && entry.name === "book_service" && entry.arguments) {
@@ -383,6 +383,10 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
           const args = JSON.parse(entry.arguments);
           if (!customerName && args.customer_name) customerName = args.customer_name;
           if (!serviceAddress && args.service_address) serviceAddress = args.service_address;
+          // Append ZIP to address so future lookups can extract it
+          if (args.zip_code && serviceAddress && !serviceAddress.includes(args.zip_code)) {
+            serviceAddress = `${serviceAddress}, ${args.zip_code}`;
+          }
         } catch {
           // Not JSON - skip
         }

@@ -1,5 +1,132 @@
 # OPTIMIZATION LOG
 
+## 2026-02-12 — Patch #16: 5 UX Fixes from Call Analysis
+
+### Problem
+Call `call_5822a97bfc9c162cc7121ddc68e` (Jonas, 2m41s, v78) — Patches #15/#15c confirmed working (zero transition narration, no premature ending, safety question asked). But revealed 5 UX issues:
+1. **Time mismatch**: Agent said "Locking in 7:30 AM" then "You're all set for 8:00 AM" — Cal.com snapped to closest slot, agent didn't acknowledge the change
+2. **Silent appointment cancellation**: Jonas had existing 11:30 AM appointment. Backend `cancelExistingBookings()` silently cancelled it before booking 8:00 AM
+3. **Double confirmation**: LLM went backward from pre_confirm → discovery → urgency → pre_confirm, re-asking for confirmation
+4. **12-second dead air**: Caused by backward state flow (#3)
+5. **Fabricated ZIP "787"**: LLM hallucinated partial ZIP from service_area rule
+
+### Change
+**Voice agent (retell-llm-v9-triage.json):**
+- Booking state: generic execution_message required (no specific time), strengthened time-mismatch comparison rule
+- Booking state: added `existing_appointment` response handler + `force_book` parameter for confirmed second visits
+- Pre_confirm state: CRITICAL ROUTING RULE — after YES, ONLY → [booking], backward transitions explicitly prohibited
+- Lookup state: explicit ZIP fabrication prohibition (must be exactly 5 digits or empty string)
+- Service_area state: validates ZIP is exactly 5 digits before accepting
+
+**Backend (calllock-dashboard book-service route):**
+- Added `force_book` parameter to `book_service` tool
+- Before cancelling existing bookings, checks for same-date conflicts
+- Returns `{ booked: false, existing_appointment: { date, time } }` when conflict detected
+- Voice agent asks caller: reschedule or add second visit
+
+### Result
+Pending test call + dashboard deploy. Voice agent config deployed to Retell.
+
+### Key Learning
+**Silent cancellation is worse than double-booking.** The `cancelExistingBookings()` function was designed to prevent duplicate bookings by cancelling old ones before creating new ones. But the customer doesn't know — they expect both appointments to exist. The fix adds a server-side guard that surfaces the conflict to the voice agent, letting the caller decide. Also: **LLMs route backward when they sense incomplete data** — the fabricated ZIP "787" may have triggered the backward flow from pre_confirm to discovery. Preventing both the backward routing and the data fabrication creates defense-in-depth.
+
+## 2026-02-12 — Patch #15c: Complete Transition Word Purge + Local File Sync
+
+### Problem
+Call `call_4974ca9b729f1448f311aec587c` (Jonas, 2m47s) confirmed Patch #15 structural fix works (premature ending fixed, safety question asked, booking time match). But agent said "Transitioning now" 4 times — caller even echoed it back. Patch #15b replaced 43 "Transition to [state]" → "→ [state]" but left 22 instances of "transition" in edge descriptions and other instructional text.
+
+### Change
+- Completed the transition word purge: replaced all remaining instructional uses of "transition" in edge descriptions, state prompts, and tool descriptions
+- Replacements: "Transition immediately" → "Proceed immediately", "TRANSITION to" → "PROCEED to", "transition speech" → "greeting", "during the transition" → "from the welcome state"
+- Final count: 0 LLM-readable "transition" instances (19 total remain: 17 `speak_during_transition` API keys + 2 WORDS TO AVOID rule)
+- Synced local `retell-llm-v9-triage.json` from deployed Retell config (was out of sync after undo)
+
+### Result
+Pending test call. With zero "transition" in LLM-readable text, the LLM has no source word to narrate. Same structural approach that fixed end_call (remove the trigger, don't rely on "don't do this" rules).
+
+### Key Learning
+**The transition purge must be complete.** Patch #15b caught the "Transition to [state]" pattern (43 instances) but missed "Transition immediately" in edge descriptions (15 instances) and other forms ("TRANSITION within", "transition speech"). Partial purges leave the same vulnerability — the LLM only needs one instance to narrate.
+
+## 2026-02-11 — Patch #15: Structural Safety Fix (Remove end_call)
+
+### Problem
+Call `call_5e604543b07b26757cf5cc5f9fa` (Jonas, 37s) — agent saw existing appointment + callback and called `end_call` from safety state without asking safety question. Said "It seems like we have everything noted" and hung up. 3rd occurrence of premature ending (also Patches #12, #13). Prompt-based guards (Rule 15, "NEVER End Call From This State") are insufficient — LLM ignores them.
+
+### Change
+- **Removed `end_call` tool from safety state** — structural prevention, LLM cannot end calls from safety
+- **Added `safety_emergency` state** — 14th state, terminal, only for confirmed 911 emergencies. Has `end_call` tool.
+- **Added safety → safety_emergency transition edge** — for confirmed gas/burning/smoke/CO. The safety_emergency state delivers the 911 message and ends the call.
+- **Updated safety prompt** — CONFIRMED YES handler now transitions to [safety_emergency] instead of calling end_call
+
+### Result
+Pending test call. With end_call physically removed, the LLM can only transition to [service_area] (safe) or [safety_emergency] (confirmed danger). No prompt-level guard needed — the constraint is structural.
+
+### Key Learning
+**Prompt-based tool restrictions don't work with GPT-4o.** When the LLM has a tool available, it will use it even if the description says not to. The only reliable guard is removing the tool entirely. This pattern should be applied to other states where premature ending is a concern.
+
+## 2026-02-11 — Patch #14: Required Edge Parameters + Booking Time Mismatch Guard
+
+### Problem
+Call `call_60cc805bd6fbbe58bdc0aa329ee` (Jonas, return caller, 2m28s) showed v78 fixes partially worked — no transition language leak, no premature ending — but 2 issues persisted:
+1. Agent still re-asked for ZIP and address despite recognizing Jonas. Root cause: edge parameters for `zip_code`, `service_address`, `customer_name` were optional, so GPT-4o silently omitted them.
+2. Agent confirmed "5:00 PM" with caller but Cal.com booked 3:45 PM. Agent read the response verbatim without flagging the 1h15m time discrepancy.
+
+### Change
+- **lookup state prompt**: Moved pre-fill instruction to prominent position with explicit field mapping (`address` → `service_address`, `zipCode` → `zip_code`)
+- **lookup → safety edge**: `zip_code`, `service_address`, `customer_name` now REQUIRED
+- **safety → service_area edge**: `zip_code`, `service_address` now REQUIRED
+- **service_area → discovery edge**: `service_address`, `customer_name` now REQUIRED
+- **booking state prompt**: Added time mismatch sub-case — if booked time differs from pre_confirm, agent flags discrepancy before confirming
+
+### Result
+Test call `call_17edd4681fb16a8cbe9d8bcc780` confirmed: LLM now populates required params ✅ but set `service_address: "Not provided"` because backend returns no clean address for Jonas (garbled addresses filtered, recent booking not yet in Supabase).
+
+## 2026-02-11 — Patch #14b: Backend Address Fallback + Sentinel Value Fix
+
+### Problem
+Patch #14 config fix works but data gap in backend: `lookup_caller` returns no address for Jonas because older jobs have garbled addresses and the most recent booking hasn't propagated to the jobs table. LLM used "Not provided" instead of empty string for missing values.
+
+### Change
+- **customer-history.ts**: Added "Not provided" to address filter alongside "TBD"; added fallback to extract address from upcoming appointment job records when no clean address found in recent jobs
+- **lookup state prompt**: Explicitly prohibit "Not provided", "N/A", "unknown" as values — only empty string allowed for missing fields
+- **discovery state prompt**: Added "Not provided" to sentinel value list (fields with this value are treated as unfilled)
+
+### Result
+Pending Render deploy + test call. Backend fallback will find addresses from upcoming appointment jobs. Sentinel fix prevents LLM from treating "Not provided" as a real address.
+
+## 2026-02-11 — v78 Return Caller Data Leak + Urgency Guard
+
+### Problem
+Call `call_11881293afaa632e4028fa256a4` (Jonas, return caller) showed 3 regressions:
+1. Agent re-asked for ZIP and address despite Jonas being a recognized return caller — `service_address` and `customer_name` were dropped at the `service_area → discovery` edge
+2. Agent said "Let me move this forward" — process-narrating filler not on the WORDS TO AVOID list
+3. Agent called `end_call` in urgency instead of transitioning to `pre_confirm`, skipping the booking flow entirely
+
+### Change
+- **service_area → discovery edge**: Added `service_address` + `customer_name` parameters with Data Passthrough instruction
+- **WORDS TO AVOID**: Added "Let me move this forward" and 4 similar process-narrating phrases + general rule against describing own process
+- **Rule 16 (URGENCY END_CALL GUARD)**: `end_call` in urgency requires prior `create_callback_request` response; otherwise must transition to `[pre_confirm]`
+- **urgency end_call description**: PREREQUISITE enforcement + PROHIBITED for scheduling flows
+- **urgency state_prompt**: SCHEDULING FLOW FIREWALL added to CRITICAL RULES
+
+### Result
+Return caller data now flows through service_area → discovery without loss. Process-narrating filler blocked. Urgency state can no longer end calls prematurely when caller wants to schedule — must route through pre_confirm → booking.
+
+## 2026-02-11 — v76 Return Caller Address Fix
+
+### Problem
+Return callers (e.g., Jonas) were re-asked for ZIP and street address on every call despite being recognized. Three root causes found via call `call_8f4be5a1a3624a0954947d0bb3b`:
+1. `service_area → discovery` edge only passed `zip_code` — `service_address` and `customer_name` were dropped at the handoff
+2. `book_service` tool didn't capture `zip_code`, so no ZIP was stored in the database for future lookups
+3. Garbled addresses like `"4599 Mustang or Franklin Road"` were stored without validation
+
+### Change
+- **Retell LLM**: Added `service_address` + `customer_name` params to `service_area → discovery` edge; added `zip_code` param to `book_service` tool; updated state prompts to pass data through
+- **Backend**: `server.ts` appends ZIP to stored address (e.g., "4210 South Lamar Blvd, 78745"); `customer-history.ts` filters out garbled addresses containing "or"
+
+### Result
+Return callers with clean stored address + ZIP will skip both `service_area` and `discovery` address collection. New bookings will store ZIP alongside address for future lookups.
+
 ## 2026-02-06 — v4 → v5 Persona Transformation
 
 ### Problem

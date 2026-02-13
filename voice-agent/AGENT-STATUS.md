@@ -1,18 +1,202 @@
 # AGENT STATUS
 
-- Version: v9-triage (13-state) — deployed Feb 11 2026 (v71)
-- Previous: v8-returning-callers (v67)
+- Version: v9-triage (15-state) — deployed Feb 12 2026 (Patch #18)
+- Previous: v9-triage Patch #17
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
-- Retell Phone Number Version: 71 (bound to +13126463816)
-- Retell Published Version: 71
+- Retell Phone Number Version: 78 (bound to +13126463816)
+- Retell Published Version: 78
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: LIVE — v9 triage + high-ticket + PM logic
+- Deployment status: LIVE — Patch #18: Urgency state split (structural booking-skip fix). 15 states.
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
 - Config file: retell-llm-v9-triage.json
+
+## Feb 12 Patch #18 — Urgency State Split (Structural Booking-Skip Fix)
+
+Call `call_f363ef11dc899c050ced367ec03` (Jonas, 56s) — Patch #17 fixed lead_type misclassification but agent STILL skipped booking. Agent called end_call from urgency without determining timing, without attempting booking, and without calling create_callback_request (violating Rule 16). Prompt-based guards failed again.
+
+### Root Cause:
+end_call tool available in urgency state. LLM preferred end_call over the transition edge to pre_confirm. Same class of bug as Patches #5-#7, #10, #13 — prompt-based guards have 0% success rate for this pattern.
+
+### Structural Fix:
+- **Removed ALL tools from urgency state** — LLM can only route via edges (same pattern as Patch #7)
+- **Added urgency_callback state** (15th state, terminal) — has end_call, create_callback_request, send_sales_lead_alert
+- **Urgency now pure triage** — determine timing, route to pre_confirm (default) or urgency_callback (callbacks only)
+
+### Deploy Status:
+- [x] Voice agent config deployed to Retell LLM (via API PATCH, 15 states)
+- [ ] Test call needed: "broken thermostat" should reach booking
+- [ ] Test call needed: "I need a new AC" should reach urgency_callback
+- [ ] Test call needed: "just call me back" should reach urgency_callback
+
+## Feb 12 Patch #17 — Booking Skip Prevention + Sentiment Fix
+
+Call `call_80b30d25205a5a3b479a173cd7c` revealed voice agent incorrectly classified "broken thermostat cover" as `high_ticket`, skipping booking flow and forcing a sales callback. Also discovered `sentiment_score` always null due to case sensitivity.
+
+### Root Cause (Agent):
+Discovery state set `lead_type="high_ticket"` for "broken thermostat cover" — a simple repair, not a replacement. This triggered the urgency state's sales lead path (Rule 14), which calls `create_callback_request` instead of transitioning to `pre_confirm` → `booking`.
+
+### Voice Agent Changes:
+1. **Discovery state prompt**: Added explicit negative examples for high-ticket detection — "broken", "not working", "cover", "noise", "leak" are REPAIR indicators, not replacement signals.
+2. **Urgency state prompt**: Added VALIDATION guardrail — before taking the sales lead path, verify `problem_description` actually describes replacement/new equipment, not a repair.
+3. **Discovery → urgency edge**: Tightened `lead_type` parameter description with concrete examples ("broken thermostat = '', I need a new AC = high_ticket") and default-to-empty instruction.
+
+### V2 Backend Changes:
+4. **`mapSentimentToScore()`**: Now calls `.toLowerCase()` before matching. Retell sends "Negative" (title case), function expected "negative" (lowercase).
+5. **`user_sentiment` type**: Widened from `"positive" | "neutral" | "negative"` to `string` for API resilience.
+
+### Deploy Status:
+- [x] Voice agent config deployed to Retell LLM (via API PATCH)
+- [x] V2 backend merged to main (PR #18) — Render deploying
+- [ ] Test call needed: "broken thermostat" should proceed to booking
+- [ ] Test call needed: "new AC system" should route to sales callback
+- [ ] Verify sentiment_score populated on next call
+
+## Feb 12 Patch #16 — 5 UX Fixes from Call Analysis
+
+Call `call_5822a97bfc9c162cc7121ddc68e` (Jonas, 2m41s) — Patches #15/#15c confirmed working (zero transition narration, no premature ending, safety question asked). But revealed 5 new UX issues:
+
+### Issues Fixed:
+
+1. **Time mismatch** — Agent said "Locking in your 7:30 AM" then "You're all set for 8:00 AM" without acknowledging the change. Cal.com snapped to closest slot.
+   - **Fix:** Booking state now requires GENERIC execution_message (no specific time). Strengthened time-mismatch comparison rule — agent MUST acknowledge any time difference.
+
+2. **Existing appointment silently cancelled** — Jonas had 11:30 AM appointment. Backend `cancelExistingBookings()` silently cancelled it before booking 8:00 AM. Customer unaware.
+   - **Fix:** Backend now checks for same-date existing bookings BEFORE cancelling. Returns `existing_appointment` data with warning. Voice agent asks caller to choose: reschedule or add second visit. `force_book` parameter bypasses check when caller confirms second visit.
+
+3. **Double confirmation** — LLM called `transition_to_discovery` (backward) from pre_confirm instead of `transition_to_booking` (forward), causing a second pass through discovery → urgency → pre_confirm with a re-confirmation question.
+   - **Fix:** Added CRITICAL ROUTING RULE to pre_confirm: after YES, ONLY → [booking]. Explicitly prohibits backward transitions.
+
+4. **12-second dead air** — Symptom of #3. Backward state flow created silent gap during transitions. Resolved by Fix #3.
+
+5. **Fabricated ZIP "787"** — LLM hallucinated partial ZIP from service_area rule "ZIP must start with 787". No ZIP in customer record.
+   - **Fix:** Lookup state now explicitly prohibits ZIP fabrication. Service_area state validates ZIP is exactly 5 digits before accepting.
+
+### Deploy Status:
+- [x] Voice agent config deployed to Retell LLM (14 states)
+- [ ] Dashboard deploy needed for duplicate booking backend guard (calllock-dashboard book-service route)
+- [ ] Test call needed to verify all 5 fixes
+
+## Feb 12 Patch #15c — Complete Transition Word Purge + Local File Sync
+
+Call `call_4974ca9b729f1448f311aec587c` (Jonas, 2m47s) — Patch #15 structural fix confirmed working (full flow, safety question asked, booking time match). BUT agent said "Transitioning now" 4 times — the LLM was narrating its instruction text.
+
+**Root cause:** State prompts and edge descriptions contained ~45 instances of "Transition to [state]" and "Transition immediately". LLM read these aloud as "Transitioning now". WORDS TO AVOID rule was ignored (same pattern as end_call — prompt-based guards don't work).
+
+**Fix (Patches #15b + #15c):**
+- Replaced all "Transition to [state]" → "→ [state]" in state prompts (43 instances)
+- Replaced all "Transition immediately" → "Proceed immediately" in edge descriptions (~15 instances)
+- Replaced instructional uses: "TRANSITION to next state" → "PROCEED", "transition speech" → "greeting", etc.
+- Strengthened WORDS TO AVOID: "NEVER say the word 'transition' or 'transitioning' in any form"
+- **Final count: 0 LLM-readable "transition" instances** (only API keys `speak_during_transition` and the WORDS TO AVOID rule remain)
+- **Synced local file** from deployed Retell config — local file was out of sync after previous undo
+
+### Deploy Status:
+- [x] Voice agent config deployed to Retell LLM (14 states)
+- [ ] Render deploy pending for backend address fixes
+- [ ] Test call needed to verify transition narration is resolved
+
+## Feb 11 Patch #15 — Structural Safety Fix (Remove end_call from Safety State)
+
+Call `call_5e604543b07b26757cf5cc5f9fa` (Jonas, 37s) — agent saw existing appointment + callback and called `end_call` from safety state without asking the safety question. 3rd recurrence of premature ending bug despite Rules 15, 16, and prompt guards.
+
+**Root cause:** `end_call` tool is physically available in the safety state. Prompt-based guards don't work — LLM ignores them when context is rich (appointment + callback + multiple recent calls).
+
+**Structural fix:**
+- **Removed `end_call` tool from safety state entirely** — LLM physically cannot end calls from this state
+- **Added `safety_emergency` state** (14th state) — terminal state with end_call, only reachable via transition from safety after confirmed 911 emergency
+- **Added safety → safety_emergency edge** for confirmed gas/burning/smoke/CO emergencies
+- **Updated safety prompt** — "CONFIRMED YES" now transitions to [safety_emergency] instead of calling end_call directly
+
+### Deploy Status:
+- [x] Voice agent config deployed to Retell LLM (14 states)
+- [ ] Render deploy pending for backend address fixes
+
+## Feb 11 Patch #14 — Required Edge Parameters + Booking Time Mismatch Guard
+
+Call `call_60cc805bd6fbbe58bdc0aa329ee` (Jonas, return caller, 2m28s) revealed 2 remaining issues:
+
+### Root cause analysis:
+1. **Address/ZIP still re-asked despite v78 fix** — Edge parameters for `zip_code`, `service_address`, and `customer_name` were optional (not `required`). GPT-4o silently omitted them during transitions, so service_area and discovery received empty values and re-asked.
+2. **Booking time mismatch not flagged** — Agent confirmed "5:00 PM" with caller, but Cal.com booked 3:45 PM (nearest available). Agent read the response verbatim without flagging the 1h15m discrepancy. Caller may not have noticed.
+
+### Voice Agent Changes:
+- **lookup state prompt**: Moved pre-fill instruction to prominent position right after Step 2, with explicit field mapping (`address` → `service_address`, `zipCode` → `zip_code`, `customerName` → `customer_name`). Old buried instruction replaced with brief reminder.
+- **lookup → safety edge**: Made `zip_code`, `service_address`, `customer_name` required (was only `caller_known`).
+- **safety → service_area edge**: Made `zip_code`, `service_address` required (was only `safety_clear`).
+- **service_area → discovery edge**: Made `service_address`, `customer_name` required (was only `zip_code`).
+- **booking state prompt**: Added time mismatch sub-case — if `booked: true` but time differs from pre_confirm, agent flags discrepancy and asks caller to re-confirm before transitioning.
+
+### Deploy Status:
+- [x] Voice agent config deployed to Retell LLM
+- [x] Patch #14 verified: LLM populates required params ✅ but data gap in backend
+
+### Patch #14b — Backend Address Fallback + Sentinel Value Fix
+
+Test call `call_17edd4681fb16a8cbe9d8bcc780` confirmed Patch #14 config changes work (LLM populates required params) but `service_address: "Not provided"` because backend has no clean address for Jonas.
+
+**Root cause:** Older jobs have garbled addresses filtered by "or" filter. Most recent booking not yet in Supabase. LLM used "Not provided" instead of empty string.
+
+### Changes:
+- **customer-history.ts**: Added "Not provided" to address filter; added fallback to extract address from upcoming appointment job records
+- **lookup state prompt**: Explicitly prohibit "Not provided", "N/A", "unknown" — only empty string for missing values
+- **discovery state prompt**: Added "Not provided" to sentinel value list
+
+### Deploy Status:
+- [x] Voice agent config deployed to Retell LLM
+- [ ] V2 backend needs manual deploy to Render
+- [ ] Test call needed to verify
+
+## Feb 11 Patch #13 (v78) — Return Caller Data Leak, Duplicate Speech, Premature End Call
+
+Call `call_11881293afaa632e4028fa256a4` (Jonas, return caller) revealed 3 issues:
+
+### Root cause analysis:
+1. **Data lost at service_area → discovery** — Edge only passed `zip_code`; `service_address` and `customer_name` were dropped, causing the agent to re-ask for address and ZIP despite being a known caller.
+2. **"Let me move this forward" spoken aloud** — Process-narrating phrase not on the WORDS TO AVOID blocklist. GPT-4o generated it as filler during transitions.
+3. **Premature end_call in urgency** — Agent called `end_call` instead of transitioning to `pre_confirm`, skipping the entire booking flow. No `create_callback_request` was called first.
+
+### Voice Agent Changes:
+- **service_area → discovery edge**: Added `service_address` and `customer_name` parameters so return caller data flows through the transition.
+- **service_area state_prompt**: Added "Data Passthrough" section instructing agent to carry through `service_address` and `customer_name` silently.
+- **general_prompt WORDS TO AVOID**: Added "Let me move this forward", "Moving this forward", "Let me move forward", "Let me handle this", "Let me process this" and a rule against process-narrating filler phrases.
+- **general_prompt Rule 16**: URGENCY END_CALL GUARD — `end_call` in urgency may ONLY be called AFTER `create_callback_request` has returned. Otherwise, the ONLY exit is the transition edge to `[pre_confirm]`.
+- **urgency end_call description**: Updated to require `create_callback_request` as a PREREQUISITE. Explicitly PROHIBITS `end_call` for scheduling flows.
+- **urgency state_prompt**: Added SCHEDULING FLOW FIREWALL — if caller wants to schedule, the ONLY valid exit is the transition edge to `[pre_confirm]`.
+
+### Deploy Status:
+- [x] Voice agent v78 deployed to Retell
+- [x] Phone number re-bound to v78
+
+## Feb 11 Patch #12 (v76) — Return Caller Fixes (Transition Leak, Premature Ending, Garbled Address)
+
+Call `call_b7454c272786915f31c6399378f` (Jonas, 44s) revealed 3 issues with return caller handling.
+
+### Root cause analysis:
+1. **"Transitioning now" spoken aloud** — GPT-4o interpreted state prompt instructions ("Transition to [safety]") as speech, generating "Transitioning now" during `speak_during_transition`. Happened at lookup→safety and safety→service_area edges.
+2. **Premature call ending** — Agent reached service_area, saw Jonas had an existing appointment (Wed Feb 11 @ 3:15 PM), and called end_call with "you're all set" instead of asking what he actually needed. Violated end_call's own restriction (ZIP-out-of-area only) and Rule 11 (BOOKING FIREWALL).
+3. **Garbled address** — Lookup returned `"4599 Mustang or Franklin Road"` from jobs table — ambiguous address stored from a previous call without validation.
+
+### Voice Agent Changes:
+- **general_prompt WORDS TO AVOID**: Added "NEVER say 'Transitioning now', 'Transitioning', 'Let me transition', or any internal process language."
+- **general_prompt Rule 15**: "EXISTING APPOINTMENT ≠ CALLER HANDLED" — having an upcoming appointment does NOT mean the caller's needs are met. ALWAYS continue the flow.
+- **service_area end_call description**: Added "NEVER end the call because the caller has an existing appointment — that is NOT a valid reason to end."
+- **service_area → discovery edge**: Added `service_address` and `customer_name` parameters so return caller data stops getting dropped at handoff.
+- **service_area state prompt**: Added pass-through instruction for `{{service_address}}` and `{{customer_name}}` when transitioning.
+- **book_service tool**: Added `zip_code` parameter so ZIP is captured at booking time.
+- **booking state prompt**: Added `zip_code` to the list of values passed to `book_service`.
+
+### V2 Backend Changes:
+- **customer-history.ts**: Address validation filter — skip addresses containing word "or" (ambiguous alternatives from AI). Agent will ask fresh instead of using garbled data.
+- **server.ts**: Post-call extraction appends `zip_code` from `book_service` args to stored address (e.g., "4210 South Lamar Blvd, 78745") so future lookups can extract ZIP.
+
+### Deploy Status:
+- [x] Voice agent v76 deployed to Retell
+- [x] Phone number re-bound to v76
+- [ ] V2 backend deployed to Render (for address + ZIP fix)
 
 ## v9 Triage Release (v71) — 5-Feature Upgrade (Feb 11 2026)
 
@@ -257,7 +441,7 @@ Fixes from call_34883974e5d7ef5804ba49ce98c analysis:
 - **Booking management**: reschedule, cancel, or status check via `manage_appointment` tool
 - **Intent switching**: any branch can exit into new-issue flow with pre-filled data
 
-## State Flow (v9 — 13 states)
+## State Flow (v9 — 14 states)
 
 ### New caller / new issue:
 ```

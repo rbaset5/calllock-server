@@ -295,6 +295,7 @@ export interface ConversationState {
   appointmentId?: string;
   appointmentDateTime?: string;
   endCallReason?: EndCallReason;
+  lastAgentState?: string;          // Last agent state for dead-end call detection
   isSafetyEmergency: boolean;
   isUrgentEscalation: boolean;
 }
@@ -370,7 +371,7 @@ export interface CustomAnalysisData {
 
 export interface RetellCallAnalysis {
   call_summary?: string;
-  user_sentiment?: "positive" | "neutral" | "negative";
+  user_sentiment?: string;
   call_successful?: boolean;
   custom_analysis_data?: CustomAnalysisData;
 }
