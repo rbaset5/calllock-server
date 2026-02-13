@@ -8,8 +8,6 @@ import {
   RetellPostCallWebhook,
   RetellPostCallData,
   UrgencyLevel,
-  EndCallReason,
-  HVACIssueType,
 } from "./types/retell.js";
 import {
   lookupBookingByPhone,
@@ -38,8 +36,15 @@ import {
   phoneSchema,
 } from "./validation/schemas.js";
 import { inferUrgencyFromContext } from "./extraction/urgency.js";
-import { extractCustomerName, extractSafetyEmergency } from "./extraction/post-call.js";
+import {
+  extractCustomerName,
+  extractSafetyEmergency,
+  mapUrgencyLevelFromAnalysis,
+  extractAddressFromTranscript,
+  mapDisconnectionReason,
+} from "./extraction/post-call.js";
 import { incrementStateVisit, isStateLooping } from "./state/conversation-state.js";
+import { inferHvacIssueType } from "./extraction/hvac-issue.js";
 
 // ===========================================
 // Test Phone Masking (toggle via MASK_TEST_PHONES env var)
@@ -225,80 +230,9 @@ app.use("/webhook/retell", retellWebhookAuth);
 // Retell Post-Call Webhook (Dashboard Integration)
 // ============================================
 
-/**
- * Map urgency level string from post-call analysis to UrgencyLevel type
- */
-function mapUrgencyLevelFromAnalysis(urgencyLevel?: string): UrgencyLevel | undefined {
-  if (!urgencyLevel) return undefined;
-  const normalized = urgencyLevel.toLowerCase();
-  if (normalized.includes("emergency")) return "Emergency";
-  if (normalized.includes("urgent")) return "Urgent";
-  if (normalized.includes("routine")) return "Routine";
-  if (normalized.includes("estimate")) return "Estimate";
-  return undefined;
-}
-
-/**
- * Extract address from transcript using regex (fallback when custom analysis unavailable)
- */
-function extractAddressFromTranscript(transcript?: string): string | undefined {
-  if (!transcript) return undefined;
-  const addressMatch = transcript.match(
-    /(\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Court|Ct|Lane|Ln|Way|Boulevard|Blvd)[,\s]+[\w\s]+,?\s*(?:Texas|TX)?\s*\d{5})/i
-  );
-  return addressMatch ? addressMatch[1].trim() : undefined;
-}
-
-/**
- * Map Retell's disconnection_reason to our EndCallReason
- * Retell uses reasons like: "user_hangup", "agent_hangup", "call_transfer", "voicemail", "inactivity", etc.
- */
-function mapDisconnectionReason(reason?: string): EndCallReason | undefined {
-  if (!reason) return undefined;
-
-  const lowered = reason.toLowerCase();
-
-  // Customer hung up before conversation completed
-  if (lowered.includes("user_hangup") || lowered.includes("customer_hangup") || lowered === "hangup") {
-    return "customer_hangup";
-  }
-
-  // Call went to voicemail - treat as callback_later (they need to call back)
-  if (lowered.includes("voicemail")) {
-    return "callback_later";
-  }
-
-  // Other reasons don't map to our specific end call reasons
-  return undefined;
-}
-
-/**
- * Infer HVAC issue type from problem description and transcript
- * Used as a fallback when the voice agent doesn't set hvacIssueType
- */
-function inferHvacIssueType(problemDesc?: string, transcript?: string): HVACIssueType | undefined {
-  const text = [problemDesc, transcript].filter(Boolean).join(" ").toLowerCase();
-  if (!text) return undefined;
-
-  // Water/leak patterns
-  if (/water\s*(leak|puddle|drip|pool)|leak.*unit|puddle.*inside|dripping/i.test(text)) return "Leaking";
-  // Cooling patterns
-  if (/not?\s*cool|ac\s*(not|isn|won)|no\s*(cold|cool)|warm\s*air|won.t\s*cool/i.test(text)) return "No Cool";
-  // Heating patterns
-  if (/not?\s*heat|no\s*heat|furnace\s*(not|won|isn)|cold\s*air.*heat|won.t\s*heat/i.test(text)) return "No Heat";
-  // Noise patterns
-  if (/noise|loud|bang|rattle|squeal|grind|vibrat/i.test(text)) return "Noisy System";
-  // Smell patterns
-  if (/smell|odor|musty|mold/i.test(text)) return "Odor";
-  // Not running
-  if (/won.t\s*(start|turn|run)|not\s*(start|turn|run)|dead|no\s*power/i.test(text)) return "Not Running";
-  // Thermostat
-  if (/thermostat|temperature.*wrong|temp.*off/i.test(text)) return "Thermostat";
-  // Maintenance
-  if (/maintenance|tune.?up|check.?up|seasonal|filter/i.test(text)) return "Maintenance";
-
-  return undefined;
-}
+// mapUrgencyLevelFromAnalysis, extractAddressFromTranscript, mapDisconnectionReason
+// moved to extraction/post-call.ts
+// inferHvacIssueType moved to extraction/hvac-issue.ts
 
 // inferUrgencyFromContext moved to extraction/urgency.ts
 

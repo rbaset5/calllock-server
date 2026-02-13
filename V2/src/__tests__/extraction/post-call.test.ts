@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { extractCustomerName, extractSafetyEmergency } from '../../extraction/post-call.js';
+import {
+  extractCustomerName,
+  extractSafetyEmergency,
+  mapUrgencyLevelFromAnalysis,
+  extractAddressFromTranscript,
+  mapDisconnectionReason,
+} from '../../extraction/post-call.js';
 
 describe('extractCustomerName', () => {
   it('extracts "my name is Jonas" from user utterance', () => {
@@ -69,5 +75,64 @@ describe('extractSafetyEmergency', () => {
 
   it('returns false for empty string', () => {
     expect(extractSafetyEmergency('')).toBe(false);
+  });
+});
+
+describe('mapUrgencyLevelFromAnalysis', () => {
+  it('maps emergency string to Emergency', () => {
+    expect(mapUrgencyLevelFromAnalysis('emergency')).toBe('Emergency');
+  });
+
+  it('maps urgent string to Urgent', () => {
+    expect(mapUrgencyLevelFromAnalysis('Urgent')).toBe('Urgent');
+  });
+
+  it('maps routine string to Routine', () => {
+    expect(mapUrgencyLevelFromAnalysis('routine')).toBe('Routine');
+  });
+
+  it('maps estimate string to Estimate', () => {
+    expect(mapUrgencyLevelFromAnalysis('estimate')).toBe('Estimate');
+  });
+
+  it('returns undefined for unknown strings', () => {
+    expect(mapUrgencyLevelFromAnalysis('unknown')).toBeUndefined();
+  });
+
+  it('returns undefined for undefined', () => {
+    expect(mapUrgencyLevelFromAnalysis()).toBeUndefined();
+  });
+});
+
+describe('mapDisconnectionReason', () => {
+  it('maps user_hangup to customer_hangup', () => {
+    expect(mapDisconnectionReason('user_hangup')).toBe('customer_hangup');
+  });
+
+  it('maps voicemail to callback_later', () => {
+    expect(mapDisconnectionReason('voicemail')).toBe('callback_later');
+  });
+
+  it('returns undefined for agent_hangup', () => {
+    expect(mapDisconnectionReason('agent_hangup')).toBeUndefined();
+  });
+
+  it('returns undefined for undefined', () => {
+    expect(mapDisconnectionReason()).toBeUndefined();
+  });
+});
+
+describe('extractAddressFromTranscript', () => {
+  it('extracts address with Texas zip code', () => {
+    const transcript = 'I live at 1234 Oak Street, Austin, TX 78701';
+    expect(extractAddressFromTranscript(transcript)).toContain('1234 Oak Street');
+  });
+
+  it('returns undefined for no address', () => {
+    expect(extractAddressFromTranscript('my AC is broken')).toBeUndefined();
+  });
+
+  it('returns undefined for undefined', () => {
+    expect(extractAddressFromTranscript()).toBeUndefined();
   });
 });
