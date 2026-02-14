@@ -303,6 +303,8 @@ export interface ConversationState {
   isUrgentEscalation: boolean;
   // V11: State loop guardrails (#19)
   stateVisitCounter?: Record<string, number>;
+  // V11: Quality scorecard (#39)
+  qualityScore?: number;
 }
 
 // ============================================
