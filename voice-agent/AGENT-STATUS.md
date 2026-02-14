@@ -441,7 +441,26 @@ Fixes from call_34883974e5d7ef5804ba49ce98c analysis:
 - **Booking management**: reschedule, cancel, or status check via `manage_appointment` tool
 - **Intent switching**: any branch can exit into new-issue flow with pre-filled data
 
-## State Flow (v9 — 14 states)
+## State Flow (v9 — 15 states)
+
+### All 15 states:
+```
+1. welcome          — Greet, detect intent (service / non-service / existing customer)
+2. non_service      — Billing, vendor, applicant, pricing (terminal or → safety)
+3. lookup           — Auto-lookup caller by phone (lookup_caller tool)
+4. follow_up        — Callback promise fulfillment (create_callback_request + end_call)
+5. manage_booking   — Reschedule/cancel/status check (manage_appointment + end_call)
+6. safety           — Safety screening (no tools — edges only)
+7. safety_emergency — Terminal: confirmed 911 emergency (end_call only)
+8. service_area     — ZIP validation (end_call for out-of-area)
+9. discovery        — Collect problem, address, name (no tools — edges only)
+10. urgency         — Triage timing/priority (no tools — edges only)
+11. urgency_callback — Terminal: callbacks + sales leads (create_callback_request, send_sales_lead_alert, end_call)
+12. pre_confirm     — Summarize and confirm before booking (no tools — edges only)
+13. booking         — Execute booking (book_service tool)
+14. booking_failed  — Terminal: booking fallback (create_callback_request + end_call)
+15. confirm         — Terminal: appointment confirmed (end_call only)
+```
 
 ### New caller / new issue:
 ```
@@ -456,7 +475,7 @@ welcome → non_service → safety (if pricing caller says "yes, schedule me")
 
 ### High-ticket sales lead (replacement/quote/estimate):
 ```
-welcome → lookup → safety → service_area → discovery → urgency → (sales alert + callback) → end_call
+welcome → lookup → safety → service_area → discovery → urgency → urgency_callback → end_call
 ```
 
 ### Known caller with new issue (fast-track):
@@ -475,23 +494,35 @@ welcome → lookup → follow_up → (resolve or → safety flow)
 welcome → lookup → manage_booking → confirm (or → safety flow for new issue)
 ```
 
-## Testing Status (v9)
+### Safety emergency:
+```
+(any state with safety edge) → safety → safety_emergency → end_call
+```
+
+### Booking failure:
+```
+booking → booking_failed → (callback or end_call)
+```
+
+## Testing Status (v9 — 15 states)
 
 | # | State | Type | Status |
 |---|---|---|---|
 | 1 | welcome | Modified (new intents) | Untested |
-| 2 | non_service | NEW | Untested |
+| 2 | non_service | NEW (v9) | Untested |
 | 3 | lookup | Core | Untested |
 | 4 | follow_up | Modified (callback_type) | Untested |
 | 5 | manage_booking | Core | Untested |
-| 6 | safety | Core | Untested |
-| 7 | service_area | Core | Untested |
-| 8 | discovery | Modified (high-ticket + PM) | Untested |
-| 9 | urgency | Modified (sales lead path) | Untested |
-| 10 | pre_confirm | Core | Untested |
-| 11 | booking | Modified (site contact) | Untested |
-| 12 | booking_failed | Core | Untested |
-| 13 | confirm | Core | Untested |
+| 6 | safety | Structural (no tools, Patch #15) | Untested |
+| 7 | safety_emergency | NEW (Patch #15) | Untested |
+| 8 | service_area | Core | Untested |
+| 9 | discovery | Modified (high-ticket + PM) | Untested |
+| 10 | urgency | Structural (no tools, Patch #18) | Untested |
+| 11 | urgency_callback | NEW (Patch #18) | Untested |
+| 12 | pre_confirm | Core | Untested |
+| 13 | booking | Modified (site contact) | Untested |
+| 14 | booking_failed | Core | Untested |
+| 15 | confirm | Core | Untested |
 
 ## New Tools
 
