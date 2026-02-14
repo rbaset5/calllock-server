@@ -269,6 +269,7 @@ export interface ConversationState {
   problemDescription?: string;
   // Diagnostic context fields (captured during Problem Clarification phase)
   problemDuration?: string;          // "2 days", "since yesterday", "few hours"
+  problemDurationCategory?: 'acute' | 'recent' | 'ongoing';  // Derived from problemDuration
   problemOnset?: string;             // "after power outage", "after storm", "gradual"
   problemPattern?: string;           // "constant", "intermittent", "only at night"
   customerAttemptedFixes?: string;   // "checked filter", "reset thermostat"
