@@ -20,7 +20,9 @@ export function reconcileDynamicVariables(
   }
 
   if (!state.appointmentBooked) {
-    if (dynVars.has_appointment === "true" || dynVars.booking_confirmed === "true") {
+    if (dynVars.booking_confirmed === "true") {
+      state.appointmentBooked = true;
+    } else if (dynVars.has_appointment === "true" && !state.bookingAttempted) {
       state.appointmentBooked = true;
     }
   }

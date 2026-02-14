@@ -59,6 +59,24 @@ describe('reconcileDynamicVariables', () => {
     expect(state.appointmentBooked).toBe(true);
   });
 
+  it('does NOT set appointmentBooked from has_appointment when bookingAttempted is true', () => {
+    const state = makeState({ bookingAttempted: true, appointmentBooked: false });
+    reconcileDynamicVariables(state, { has_appointment: 'true' });
+    expect(state.appointmentBooked).toBe(false);
+  });
+
+  it('sets appointmentBooked from booking_confirmed even when bookingAttempted is true', () => {
+    const state = makeState({ bookingAttempted: true, appointmentBooked: false });
+    reconcileDynamicVariables(state, { booking_confirmed: 'true' });
+    expect(state.appointmentBooked).toBe(true);
+  });
+
+  it('sets appointmentBooked from has_appointment when bookingAttempted is false', () => {
+    const state = makeState({ bookingAttempted: false, appointmentBooked: false });
+    reconcileDynamicVariables(state, { has_appointment: 'true' });
+    expect(state.appointmentBooked).toBe(true);
+  });
+
   it('sets callerKnown from caller_known', () => {
     const state = makeState();
     reconcileDynamicVariables(state, { caller_known: 'true' });
