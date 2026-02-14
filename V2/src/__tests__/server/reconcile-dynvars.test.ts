@@ -59,6 +59,24 @@ describe('reconcileDynamicVariables', () => {
     expect(state.appointmentBooked).toBe(true);
   });
 
+  it('does NOT set appointmentBooked from has_appointment when bookingAttempted is true', () => {
+    const state = makeState({ bookingAttempted: true, appointmentBooked: false });
+    reconcileDynamicVariables(state, { has_appointment: 'true' });
+    expect(state.appointmentBooked).toBe(false);
+  });
+
+  it('sets appointmentBooked from booking_confirmed even when bookingAttempted is true', () => {
+    const state = makeState({ bookingAttempted: true, appointmentBooked: false });
+    reconcileDynamicVariables(state, { booking_confirmed: 'true' });
+    expect(state.appointmentBooked).toBe(true);
+  });
+
+  it('sets appointmentBooked from has_appointment when bookingAttempted is false', () => {
+    const state = makeState({ bookingAttempted: false, appointmentBooked: false });
+    reconcileDynamicVariables(state, { has_appointment: 'true' });
+    expect(state.appointmentBooked).toBe(true);
+  });
+
   it('sets callerKnown from caller_known', () => {
     const state = makeState();
     reconcileDynamicVariables(state, { caller_known: 'true' });
@@ -93,5 +111,77 @@ describe('reconcileDynamicVariables', () => {
     const state = makeState({ customerName: 'Keep' });
     reconcileDynamicVariables(state, undefined);
     expect(state.customerName).toBe('Keep');
+  });
+
+  it('maps urgency_tier "routine" to state.urgency "Routine"', () => {
+    const state = makeState();
+    reconcileDynamicVariables(state, { urgency_tier: 'routine' });
+    expect(state.urgency).toBe('Routine');
+  });
+
+  it('maps urgency_tier "emergency" to state.urgency "Emergency"', () => {
+    const state = makeState();
+    reconcileDynamicVariables(state, { urgency_tier: 'emergency' });
+    expect(state.urgency).toBe('Emergency');
+  });
+
+  it('maps urgency_tier "same_day" to state.urgency "Urgent"', () => {
+    const state = makeState();
+    reconcileDynamicVariables(state, { urgency_tier: 'same_day' });
+    expect(state.urgency).toBe('Urgent');
+  });
+
+  it('does NOT overwrite existing urgency', () => {
+    const state = makeState({ urgency: 'Emergency' });
+    reconcileDynamicVariables(state, { urgency_tier: 'routine' });
+    expect(state.urgency).toBe('Emergency');
+  });
+});
+
+describe('callbackType inference', () => {
+  it('infers callbackType as service when callback_later without booking', () => {
+    const state = makeState({
+      endCallReason: 'callback_later',
+      appointmentBooked: false,
+    });
+    if (
+      state.endCallReason === 'callback_later' &&
+      !state.callbackType &&
+      !state.appointmentBooked
+    ) {
+      state.callbackType = 'service';
+    }
+    expect(state.callbackType).toBe('service');
+  });
+
+  it('does NOT override existing callbackType', () => {
+    const state = makeState({
+      endCallReason: 'callback_later',
+      callbackType: 'billing',
+      appointmentBooked: false,
+    });
+    if (
+      state.endCallReason === 'callback_later' &&
+      !state.callbackType &&
+      !state.appointmentBooked
+    ) {
+      state.callbackType = 'service';
+    }
+    expect(state.callbackType).toBe('billing');
+  });
+
+  it('does NOT infer callbackType when appointment is booked', () => {
+    const state = makeState({
+      endCallReason: 'callback_later',
+      appointmentBooked: true,
+    });
+    if (
+      state.endCallReason === 'callback_later' &&
+      !state.callbackType &&
+      !state.appointmentBooked
+    ) {
+      state.callbackType = 'service';
+    }
+    expect(state.callbackType).toBeUndefined();
   });
 });

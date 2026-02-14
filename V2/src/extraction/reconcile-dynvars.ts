@@ -1,4 +1,4 @@
-import { ConversationState } from "../types/retell.js";
+import type { ConversationState, UrgencyLevel } from "../types/retell.js";
 
 /**
  * Merge Retell's collected_dynamic_variables into conversation state.
@@ -20,7 +20,9 @@ export function reconcileDynamicVariables(
   }
 
   if (!state.appointmentBooked) {
-    if (dynVars.has_appointment === "true" || dynVars.booking_confirmed === "true") {
+    if (dynVars.booking_confirmed === "true") {
+      state.appointmentBooked = true;
+    } else if (dynVars.has_appointment === "true" && !state.bookingAttempted) {
       state.appointmentBooked = true;
     }
   }
@@ -39,5 +41,19 @@ export function reconcileDynamicVariables(
 
   if (!state.lastAgentState && dynVars.current_agent_state) {
     state.lastAgentState = dynVars.current_agent_state;
+  }
+
+  if (!state.urgency && dynVars.urgency_tier) {
+    const tierMap: Record<string, UrgencyLevel> = {
+      emergency: "Emergency",
+      urgent: "Urgent",
+      same_day: "Urgent",
+      routine: "Routine",
+      estimate: "Estimate",
+    };
+    const mapped = tierMap[dynVars.urgency_tier.toLowerCase()];
+    if (mapped) {
+      state.urgency = mapped;
+    }
   }
 }

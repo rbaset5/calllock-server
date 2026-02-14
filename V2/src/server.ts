@@ -556,6 +556,16 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       }
     }
 
+    // Infer callbackType when agent promised callback but didn't invoke create_callback.
+    // This happens when the agent uses end_call (built-in) instead of create_callback (custom).
+    if (
+      conversationState.endCallReason === "callback_later" &&
+      !conversationState.callbackType &&
+      !conversationState.appointmentBooked
+    ) {
+      conversationState.callbackType = "service";
+    }
+
     // Level 1 instrumentation: call quality scorecard
     const tags = classifyCall(conversationState, payload.call.transcript, payload.call.start_timestamp);
     const scorecard = buildCallScorecard(conversationState, tags);
