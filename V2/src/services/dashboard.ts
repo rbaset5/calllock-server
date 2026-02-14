@@ -66,6 +66,7 @@ export interface DashboardJobPayload {
   sales_lead_notes?: string;
   // Diagnostic context fields (from problem clarification phase)
   problem_duration?: string;
+  problem_duration_category?: 'acute' | 'recent' | 'ongoing';
   problem_onset?: string;
   problem_pattern?: string;
   customer_attempted_fixes?: string;
@@ -545,6 +546,7 @@ export function transformToDashboardPayload(
     sales_lead_notes: state.salesLeadNotes,
     // Diagnostic context fields
     problem_duration: state.problemDuration,
+    problem_duration_category: state.problemDurationCategory,
     problem_onset: state.problemOnset,
     problem_pattern: state.problemPattern,
     customer_attempted_fixes: state.customerAttemptedFixes,
