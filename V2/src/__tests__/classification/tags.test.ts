@@ -76,4 +76,24 @@ describe('classifyCall', () => {
     // "no" negates "gas smell" within 40 chars
     expect(tags.HAZARD).not.toContain('GAS_LEAK');
   });
+
+  it('auto-emits URGENT_24HR when state.urgency is high but transcript has no urgency keywords (#36)', () => {
+    const state = makeState({ urgency: 'Urgent' as any });
+    const tags = classifyCall(state, 'I need someone to come take a look at my unit');
+    expect(tags.URGENCY).toContain('URGENT_24HR');
+  });
+
+  it('auto-emits EMERGENCY_SAMEDAY when state.urgency is emergency (#36)', () => {
+    const state = makeState({ urgency: 'Emergency' as any });
+    const tags = classifyCall(state, 'The system is not working');
+    expect(tags.URGENCY).toContain('EMERGENCY_SAMEDAY');
+  });
+
+  it('does not duplicate urgency tags if already classified from transcript', () => {
+    const state = makeState({ urgency: 'Urgent' as any });
+    const tags = classifyCall(state, 'the system is barely working and running constantly');
+    // URGENT_24HR should appear from transcript match — don't double-add
+    const count = tags.URGENCY.filter(t => t === 'URGENT_24HR').length;
+    expect(count).toBe(1);
+  });
 });
