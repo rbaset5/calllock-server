@@ -305,6 +305,15 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     }
   }
 
+  // Detect booking ATTEMPTS (even failed ones) from tool invocations
+  const bookingAttempted = appointmentBooked || (callData.transcript_with_tool_calls?.some(
+    entry => entry.role === "tool_call_invocation" &&
+      (entry.name === "book_service" || entry.name === "book_appointment")
+  ) || false);
+  if (bookingAttempted && !appointmentBooked) {
+    logger.info({ callId: callData.call_id }, "Booking attempt detected from tool invocations (may have failed)");
+  }
+
   // Also extract customer name, address, and ZIP from book_service invocation if not already set
   if (!customerName || !serviceAddress) {
     for (const entry of callData.transcript_with_tool_calls || []) {
@@ -363,6 +372,7 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     // Call metadata
     callDirection: callData.direction,
     appointmentBooked,
+    bookingAttempted,
     appointmentDateTime,
     isSafetyEmergency: extractSafetyEmergency(callData.transcript),
     isUrgentEscalation: false,
@@ -631,6 +641,7 @@ async function getOrCreateWebhookState(call: RetellFunctionWebhook["call"]): Pro
     customerPhone: customerPhone || undefined,
     phoneFromCallerId: Boolean(customerPhone),
     appointmentBooked: false,
+    bookingAttempted: false,
     isSafetyEmergency: false,
     isUrgentEscalation: false,
   };
@@ -713,6 +724,12 @@ app.post("/webhook/retell/book_appointment", async (req: Request, res: Response)
     const shouldForceTransition = isStateLooping(state, "book_appointment");
 
     const bookingUrgency = (args.urgency as string) || "Routine";
+
+    // Mark that booking was attempted — even if the API call fails,
+    // this flag ensures booking_status becomes "attempted_failed" instead of "not_requested"
+    state.bookingAttempted = true;
+    await saveCallSession(state);
+
     // Use agent-collected address, fall back to state passthrough from lookup (#18)
     const serviceAddress = (args.service_address as string) || state.serviceAddress || "TBD";
     const result = await bookAppointment({
