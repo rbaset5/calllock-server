@@ -49,6 +49,7 @@ import { inferHvacIssueType } from "./extraction/hvac-issue.js";
 import { buildCallScorecard } from "./extraction/call-scorecard.js";
 import { classifyCall } from "./classification/tags.js";
 import { reconcileDynamicVariables } from "./extraction/reconcile-dynvars.js";
+import { isGhostLead } from "./extraction/ghost-lead.js";
 
 // ===========================================
 // Test Phone Masking (toggle via MASK_TEST_PHONES env var)
@@ -505,20 +506,24 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
     const callDuration = payload.call.end_timestamp && payload.call.start_timestamp
       ? (payload.call.end_timestamp - payload.call.start_timestamp) / 1000
       : 0;
-    if (
-      payload.call.disconnection_reason === "user_hangup" &&
-      !conversationState.appointmentBooked &&
-      callDuration > 10
-    ) {
+    if (isGhostLead(payload.call.disconnection_reason, conversationState, callDuration)) {
       logger.info(
         {
           callId,
           duration: callDuration,
           customerName: conversationState.customerName,
           customerPhone: conversationState.customerPhone,
-          problemDescription: conversationState.problemDescription,
         },
         "Ghost lead detected - abandoned call with partial data"
+      );
+    } else if (
+      payload.call.disconnection_reason === "user_hangup" &&
+      conversationState.callerKnown &&
+      !conversationState.appointmentBooked
+    ) {
+      logger.info(
+        { callId, customerName: conversationState.customerName },
+        "Returning customer call ended without new booking"
       );
     }
 
@@ -561,7 +566,11 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       );
     }
 
-    if (scorecard.warnings.includes("callback-gap")) {
+    if (
+      scorecard.warnings.includes("callback-gap") &&
+      !conversationState.appointmentBooked &&
+      !conversationState.callerKnown
+    ) {
       logger.warn(
         { callId, endCallReason: conversationState.endCallReason, lastAgentState: conversationState.lastAgentState },
         "Callback gap — call ended without booking or callback request"
