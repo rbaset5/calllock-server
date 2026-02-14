@@ -6,11 +6,19 @@ function makeState(overrides?: Partial<ConversationState>): ConversationState {
   return {
     callId: 'test',
     appointmentBooked: false,
+    bookingAttempted: false,
     isSafetyEmergency: false,
     isUrgentEscalation: false,
     ...overrides,
   };
 }
+
+describe('bookingAttempted flag', () => {
+  it('defaults to false in new state', () => {
+    const state = makeState();
+    expect(state.bookingAttempted).toBe(false);
+  });
+});
 
 describe('incrementStateVisit', () => {
   it('initializes counter on first visit', () => {

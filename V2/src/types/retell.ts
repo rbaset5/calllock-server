@@ -293,6 +293,7 @@ export interface ConversationState {
   isThirdParty?: boolean;            // Caller is PM/landlord calling on behalf of tenant
   thirdPartyType?: string;           // "property_manager", "landlord", etc.
   appointmentBooked: boolean;
+  bookingAttempted: boolean;          // True when book_service was called (even if it failed)
   appointmentId?: string;
   appointmentDateTime?: string;
   endCallReason?: EndCallReason;

@@ -607,6 +607,7 @@ async function getOrCreateWebhookState(call: RetellFunctionWebhook["call"]): Pro
     customerPhone: customerPhone || undefined,
     phoneFromCallerId: Boolean(customerPhone),
     appointmentBooked: false,
+    bookingAttempted: false,
     isSafetyEmergency: false,
     isUrgentEscalation: false,
   };
