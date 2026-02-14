@@ -468,6 +468,19 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       }
     }
 
+    // Backfill bookingAttempted from transcript_with_tool_calls for saved sessions.
+    // extractStateFromPostCallData does this at line 310, but the saved-session path skips it.
+    if (!conversationState.bookingAttempted && payload.call.transcript_with_tool_calls) {
+      conversationState.bookingAttempted = payload.call.transcript_with_tool_calls.some(
+        (entry: { role: string; name?: string }) =>
+          entry.role === "tool_call_invocation" &&
+          (entry.name === "book_service" || entry.name === "book_appointment")
+      );
+      if (conversationState.bookingAttempted) {
+        logger.info({ callId }, "bookingAttempted backfilled from transcript_with_tool_calls");
+      }
+    }
+
     // Reconcile dynamic variables into state (fills gaps from sparse sessions)
     reconcileDynamicVariables(conversationState, payload.call.collected_dynamic_variables);
 
