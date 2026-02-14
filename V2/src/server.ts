@@ -541,6 +541,20 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       "Call quality scorecard"
     );
 
+    if (scorecard.warnings.includes("zero-tags")) {
+      logger.warn(
+        { callId, transcript: Boolean(payload.call.transcript), problemDescription: conversationState.problemDescription },
+        "Zero taxonomy tags classified — check transcript quality or tag patterns"
+      );
+    }
+
+    if (scorecard.warnings.includes("callback-gap")) {
+      logger.warn(
+        { callId, endCallReason: conversationState.endCallReason, lastAgentState: conversationState.lastAgentState },
+        "Callback gap — call ended without booking or callback request"
+      );
+    }
+
     // Send to dashboard (job/lead)
     const dashboardResult = await sendJobToDashboard(conversationState, payload.call);
 
