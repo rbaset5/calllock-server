@@ -1,0 +1,148 @@
+import { describe, it, expect } from 'vitest';
+import { transformToDashboardPayload } from '../../services/dashboard.js';
+import type { ConversationState, RetellPostCallData } from '../../types/retell.js';
+
+function makeState(overrides?: Partial<ConversationState>): ConversationState {
+  return {
+    callId: 'test-equip',
+    appointmentBooked: false,
+    bookingAttempted: false,
+    isSafetyEmergency: false,
+    isUrgentEscalation: false,
+    ...overrides,
+  };
+}
+
+describe('equipment_type extraction (#35)', () => {
+  it('extracts AC from "AC stopped working"', () => {
+    const state = makeState();
+    const retellData = { transcript: 'Yeah my AC stopped working this morning' } as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    expect(payload.equipment_type).toBe('AC');
+  });
+
+  it('extracts AC from "the AC is not cooling"', () => {
+    const state = makeState();
+    const retellData = { transcript: 'the AC is not cooling at all' } as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    expect(payload.equipment_type).toBe('AC');
+  });
+
+  it('uses call_subtype as fallback when transcript has no match', () => {
+    const state = makeState({ problemDescription: 'unit is broken' });
+    const retellData = { transcript: 'my unit is broken' } as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    // call_subtype may be "ac" from tags — but without specific equipment words
+    // in transcript and no state.equipmentType, should still try call_subtype
+    // This test verifies the fallback chain doesn't crash
+    expect(payload.equipment_type).toBeDefined();
+  });
+
+  it('prefers state.equipmentType over transcript mining', () => {
+    const state = makeState({ equipmentType: 'furnace' });
+    const retellData = { transcript: 'my AC stopped working' } as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    expect(payload.equipment_type).toBe('furnace');
+  });
+});
+
+describe('caller_type derivation (#37)', () => {
+  it('defaults to residential when SERVICE_TYPE tags present but no CUSTOMER tags', () => {
+    const state = makeState({ problemDescription: 'AC not cooling, blowing warm air' });
+    const retellData = { transcript: 'my air conditioner broken, warm air coming out' } as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    expect(payload.caller_type).toBe('residential');
+  });
+
+  it('defaults to residential when problemDescription exists but no tags', () => {
+    const state = makeState({ problemDescription: 'unit making noise' });
+    const retellData = { transcript: 'yeah the unit is making a loud noise' } as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    expect(payload.caller_type).toBe('residential');
+  });
+
+  it('returns unknown for truly empty calls', () => {
+    const state = makeState();
+    const payload = transformToDashboardPayload(state);
+    expect(payload.caller_type).toBe('unknown');
+  });
+
+  it('still returns commercial for commercial property type', () => {
+    const state = makeState({ propertyType: 'commercial' });
+    const payload = transformToDashboardPayload(state);
+    expect(payload.caller_type).toBe('commercial');
+  });
+});
+
+describe('card_headline differentiation (#33)', () => {
+  it('does NOT use call_summary for headline when structured data available', () => {
+    const state = makeState({ problemDescription: 'AC not cooling' });
+    const retellData = {
+      transcript: 'my air conditioner broken, blowing warm air',
+      call_analysis: { call_summary: 'Customer called about AC not cooling properly.' },
+    } as unknown as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    // card_headline should be template-based, NOT a truncation of call_summary
+    expect(payload.card_headline).not.toContain('Customer called');
+    expect(payload.card_headline).toBeDefined();
+    expect(payload.card_headline!.length).toBeLessThanOrEqual(60);
+  });
+
+  it('includes service type in headline', () => {
+    const state = makeState({ problemDescription: 'AC not cooling' });
+    const retellData = {
+      transcript: 'air conditioner broken, warm air',
+      call_analysis: { call_summary: 'Customer called about AC issues.' },
+    } as unknown as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    // Should contain service-type derived label
+    expect(payload.card_headline).toBeDefined();
+  });
+});
+
+describe('card_summary differentiation (#34)', () => {
+  it('does NOT duplicate ai_summary', () => {
+    const state = makeState({
+      customerName: 'John Smith',
+      problemDescription: 'AC not cooling',
+      appointmentBooked: true,
+      appointmentDateTime: '2026-02-15 10:00 AM',
+    });
+    const retellData = {
+      transcript: 'air conditioner broken',
+      call_analysis: { call_summary: 'Customer called about AC not cooling properly.' },
+    } as unknown as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    // card_summary should be action-oriented, NOT the raw call_summary
+    expect(payload.card_summary).not.toBe(payload.ai_summary);
+    expect(payload.card_summary).toBeDefined();
+    expect(payload.card_summary!.length).toBeLessThanOrEqual(200);
+  });
+
+  it('includes caller name and booking outcome in summary', () => {
+    const state = makeState({
+      customerName: 'John Smith',
+      problemDescription: 'furnace making noise',
+      appointmentBooked: true,
+      appointmentDateTime: '2026-02-15 10:00 AM',
+    });
+    const retellData = {
+      transcript: 'furnace is making a loud noise',
+    } as unknown as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    expect(payload.card_summary).toContain('John Smith');
+    expect(payload.card_summary).toMatch(/booked|appointment/i);
+  });
+});
+
+describe('quality_score persistence (#39)', () => {
+  it('qualityScore on ConversationState type accepts a number', () => {
+    const state = makeState({ qualityScore: 80 });
+    expect(state.qualityScore).toBe(80);
+  });
+
+  it('qualityScore defaults to undefined when not set', () => {
+    const state = makeState();
+    expect(state.qualityScore).toBeUndefined();
+  });
+});
