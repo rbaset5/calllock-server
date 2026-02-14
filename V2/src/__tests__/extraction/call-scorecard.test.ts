@@ -7,6 +7,7 @@ function makeState(overrides: Partial<ConversationState> = {}): ConversationStat
   return {
     callId: 'test-call-123',
     appointmentBooked: false,
+    bookingAttempted: false,
     isSafetyEmergency: false,
     isUrgentEscalation: false,
     ...overrides,
