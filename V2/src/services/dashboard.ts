@@ -26,6 +26,14 @@ if (!isDashboardConfigured) {
   log.info("Dashboard integration not configured - calls will not be synced to dashboard");
 }
 
+// Warn at startup if webhook URL doesn't point to production
+if (isDashboardConfigured && DASHBOARD_WEBHOOK_URL && !DASHBOARD_WEBHOOK_URL.includes("app.calllock.co")) {
+  log.warn(
+    { url: DASHBOARD_WEBHOOK_URL },
+    "DASHBOARD_WEBHOOK_URL does not point to app.calllock.co — verify env config"
+  );
+}
+
 /**
  * Dashboard webhook expected payload
  */
