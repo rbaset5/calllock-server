@@ -184,7 +184,48 @@ The System Prompt is the source of truth for the AI's personality and flow.
 - Service: `src/services/alerts.ts`
 - Uses Twilio. Fallback to console logs if env vars missing.
 
-**Project Structure:**
-- `src/server.ts`: Entry point.
-- `src/controllers/retell.ts`: Handles the webhook routing.
-- `src/functions/*`: Individual tool logic (booking, calendar, etc).
+**Project Structure (Phase 2 decomposition):**
+
+```
+src/
+  server.ts                     # Express setup, middleware, health checks, webhook routing
+  middleware/auth.ts             # Retell webhook signature verification
+  state/conversation-state.ts   # State persistence (Supabase upsert), loop detection
+  extraction/post-call.ts       # Customer name, safety emergency, disconnection reason
+  extraction/urgency.ts         # Urgency inference from transcript context
+  extraction/hvac-issue.ts      # HVAC issue type detection (AC, heating, plumbing, etc.)
+  classification/tags.ts        # 117-tag HVAC taxonomy classification
+  classification/call-type.ts   # Call type + urgency tier mapping for dashboard
+  functions/booking.ts           # book_service webhook logic
+  functions/calendar.ts          # check_calendar_availability webhook logic
+  functions/service-area.ts      # validate_service_area webhook logic
+  functions/index.ts             # Tool function registry
+  services/alerts.ts             # SMS alerts via Twilio (emergency, sales lead)
+  services/calcom.ts             # Cal.com API integration
+  services/customer-history.ts   # Caller lookup, address validation
+  services/dashboard.ts          # Dashboard webhook sync (jobs, calls, alerts)
+  services/priority-detection.ts # Priority color/reason detection
+  services/revenue-estimation.ts # Revenue tier estimation ($$$$, $$$, $$, $)
+  services/supabase.ts           # Supabase client factory
+  types/retell.ts                # ConversationState, Retell API types
+  types/index.ts                 # Shared type exports
+  validation/schemas.ts          # Zod schemas for webhook payloads
+  utils/fetch.ts                 # fetchWithRetry for webhook calls
+  utils/health.ts                # Health check endpoint logic
+  utils/logger.ts                # Pino logger configuration
+```
+
+**Test Structure:**
+```
+src/__tests__/
+  unit/                          # Unit tests for individual modules
+    extraction/post-call.test.ts
+    extraction/urgency.test.ts
+    classification/tags.test.ts
+    classification/call-type.test.ts
+    state/conversation-state.test.ts
+    middleware/auth.test.ts
+    ...
+  integration/
+    webhook-pipeline.test.ts     # End-to-end pipeline simulation (31 tests)
+```
