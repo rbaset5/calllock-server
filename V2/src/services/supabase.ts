@@ -270,12 +270,14 @@ export async function getCallSession(callId: string): Promise<ConversationState 
     "call_sessions",
     "GET",
     undefined,
-    `call_id=eq.${encodeURIComponent(callId)}&select=conversation_state`
+    `call_id=eq.${encodeURIComponent(callId)}&select=conversation_state,synced_to_dashboard`
   );
 
   if (result && result.length > 0) {
+    const state = result[0].conversation_state;
+    state.syncedToDashboard = result[0].synced_to_dashboard;
     log.info({ callId }, "Call session retrieved");
-    return result[0].conversation_state;
+    return state;
   }
 
   log.warn({ callId }, "Call session not found");

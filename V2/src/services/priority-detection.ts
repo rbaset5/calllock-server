@@ -149,7 +149,8 @@ function containsKeywords(text: string, keywords: string[]): string[] {
 export function detectPriority(
   state: ConversationState,
   transcript?: string,
-  estimate?: RevenueEstimate
+  estimate?: RevenueEstimate,
+  userSentiment?: string
 ): PriorityResult {
   const signals: string[] = [];
 
@@ -166,8 +167,8 @@ export function detectPriority(
   // RED: Callback Risk Detection
   // ============================================
 
-  // Check end call reason
-  if (state.endCallReason === "customer_hangup") {
+  // Check end call reason — only flag as frustration if sentiment is Negative
+  if (state.endCallReason === "customer_hangup" && userSentiment === "Negative") {
     signals.push("Customer hung up (potential frustration)");
   }
 

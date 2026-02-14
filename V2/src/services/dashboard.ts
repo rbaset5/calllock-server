@@ -26,6 +26,14 @@ if (!isDashboardConfigured) {
   log.info("Dashboard integration not configured - calls will not be synced to dashboard");
 }
 
+// Warn at startup if webhook URL doesn't point to production
+if (isDashboardConfigured && DASHBOARD_WEBHOOK_URL && !DASHBOARD_WEBHOOK_URL.includes("app.calllock.co")) {
+  log.warn(
+    { url: DASHBOARD_WEBHOOK_URL },
+    "DASHBOARD_WEBHOOK_URL does not point to app.calllock.co — verify env config"
+  );
+}
+
 /**
  * Dashboard webhook expected payload
  */
@@ -471,7 +479,7 @@ export function transformToDashboardPayload(
   const estimate = estimateRevenue(state, userSpeech);
 
   // Detect priority color for V4 dashboard
-  const priority = detectPriority(state, retellData?.transcript, estimate);
+  const priority = detectPriority(state, retellData?.transcript, estimate, retellData?.call_analysis?.user_sentiment);
 
   // V6: Classify call with HVAC Smart Tag Taxonomy
   const tags = classifyCall(state, retellData?.transcript, retellData?.start_timestamp);
@@ -713,7 +721,7 @@ export async function sendCallToDashboard(
   const estimate = estimateRevenue(state);
 
   // Detect priority for call record
-  const priority = detectPriority(state, retellData?.transcript, estimate);
+  const priority = detectPriority(state, retellData?.transcript, estimate, retellData?.call_analysis?.user_sentiment);
 
   // Calculate duration if we have both start and end times
   let durationSeconds: number | undefined;

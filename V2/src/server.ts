@@ -48,6 +48,8 @@ import { incrementStateVisit, isStateLooping } from "./state/conversation-state.
 import { inferHvacIssueType } from "./extraction/hvac-issue.js";
 import { buildCallScorecard } from "./extraction/call-scorecard.js";
 import { classifyCall } from "./classification/tags.js";
+import { reconcileDynamicVariables } from "./extraction/reconcile-dynvars.js";
+import { isGhostLead } from "./extraction/ghost-lead.js";
 
 // ===========================================
 // Test Phone Masking (toggle via MASK_TEST_PHONES env var)
@@ -268,12 +270,10 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
 
   let serviceAddress = dynVars?.service_address || custom?.service_address
     || extractAddressFromTranscript(callData.transcript);
-  // Prefer detailed descriptions; fall back to call_summary when dynamic vars are vague
+  // Prefer dynamic variable descriptions; fall back to call_summary
   const dynProblem = dynVars?.problem_description || dynVars?.problem_summary;
   const callSummary = callData.call_analysis?.call_summary;
-  const problemDescription = dynProblem && dynProblem.length >= 30
-    ? dynProblem
-    : callSummary || dynProblem || custom?.problem_description;
+  const problemDescription = dynProblem || callSummary || custom?.problem_description;
 
   // Check if booking was confirmed via dynamic variables
   // book_service sets booking_confirmed=true in the LLM's dynamic variables
@@ -436,6 +436,12 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
     // Retrieve the saved conversation state, or extract from webhook data
     let conversationState = await getCallSession(callId);
 
+    // Idempotency: skip if already synced to dashboard
+    if (conversationState?.syncedToDashboard) {
+      logger.info({ callId }, "Already processed — skipping duplicate call_analyzed");
+      return res.json({ success: true, message: "Already processed" });
+    }
+
     if (!conversationState) {
       // No saved session - extract data from post-call webhook payload
       logger.info({ callId }, "No session found, extracting from webhook data");
@@ -462,10 +468,8 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       }
     }
 
-    // Always capture lastAgentState from post-call data (saved sessions don't track this)
-    if (!conversationState.lastAgentState && payload.call.collected_dynamic_variables?.current_agent_state) {
-      conversationState.lastAgentState = payload.call.collected_dynamic_variables.current_agent_state;
-    }
+    // Reconcile dynamic variables into state (fills gaps from sparse sessions)
+    reconcileDynamicVariables(conversationState, payload.call.collected_dynamic_variables);
 
     // Detect bookings made via Retell's built-in Cal.com tool (book_appointment_cal).
     // The built-in tool doesn't fire a webhook to V2, so saved sessions have
@@ -508,20 +512,24 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
     const callDuration = payload.call.end_timestamp && payload.call.start_timestamp
       ? (payload.call.end_timestamp - payload.call.start_timestamp) / 1000
       : 0;
-    if (
-      payload.call.disconnection_reason === "user_hangup" &&
-      !conversationState.appointmentBooked &&
-      callDuration > 10
-    ) {
+    if (isGhostLead(payload.call.disconnection_reason, conversationState, callDuration)) {
       logger.info(
         {
           callId,
           duration: callDuration,
           customerName: conversationState.customerName,
           customerPhone: conversationState.customerPhone,
-          problemDescription: conversationState.problemDescription,
         },
         "Ghost lead detected - abandoned call with partial data"
+      );
+    } else if (
+      payload.call.disconnection_reason === "user_hangup" &&
+      conversationState.callerKnown &&
+      !conversationState.appointmentBooked
+    ) {
+      logger.info(
+        { callId, customerName: conversationState.customerName },
+        "Returning customer call ended without new booking"
       );
     }
 
@@ -564,7 +572,11 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       );
     }
 
-    if (scorecard.warnings.includes("callback-gap")) {
+    if (
+      scorecard.warnings.includes("callback-gap") &&
+      !conversationState.appointmentBooked &&
+      !conversationState.callerKnown
+    ) {
       logger.warn(
         { callId, endCallReason: conversationState.endCallReason, lastAgentState: conversationState.lastAgentState },
         "Callback gap — call ended without booking or callback request"

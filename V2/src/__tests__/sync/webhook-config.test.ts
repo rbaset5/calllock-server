@@ -42,4 +42,16 @@ describe('webhook secret configuration', () => {
     // After the fix, DASHBOARD_CALLS_URL and DASHBOARD_ALERTS_URL env vars should be checked
     expect(dashboardSource).toContain('DASHBOARD_WEBHOOK_URL');
   });
+
+  it('warns if DASHBOARD_WEBHOOK_URL does not point to production', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const dashboardSource = fs.readFileSync(
+      path.resolve(__dirname, '../../services/dashboard.ts'),
+      'utf-8'
+    );
+
+    // Verify startup URL validation exists
+    expect(dashboardSource).toContain('app.calllock.co');
+  });
 });
