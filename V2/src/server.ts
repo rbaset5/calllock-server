@@ -42,6 +42,7 @@ import {
   mapUrgencyLevelFromAnalysis,
   extractAddressFromTranscript,
   mapDisconnectionReason,
+  extractProblemDuration,
 } from "./extraction/post-call.js";
 import { incrementStateVisit, isStateLooping } from "./state/conversation-state.js";
 import { inferHvacIssueType } from "./extraction/hvac-issue.js";
@@ -351,6 +352,9 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     urgency = inferUrgencyFromContext(problemDescription, callData.transcript);
   }
 
+  // Extract problem duration from transcript as fallback (#38)
+  const durationExtraction = extractProblemDuration(callData.transcript);
+
   return {
     callId: callData.call_id,
     // Customer info - prefer dynamic variables > custom analysis
@@ -359,7 +363,8 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
     serviceAddress,
     // Problem details
     problemDescription,
-    problemDuration: custom?.problem_duration,
+    problemDuration: custom?.problem_duration || durationExtraction?.raw,
+    problemDurationCategory: durationExtraction?.category,
     problemPattern: dynVars?.problem_pattern || custom?.problem_pattern,
     // Equipment details from custom analysis
     equipmentType: custom?.equipment_type,
