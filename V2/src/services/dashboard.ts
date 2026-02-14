@@ -652,7 +652,11 @@ export async function sendCallToDashboard(
     priority_color: priority.color,
     priority_reason: priority.reason,
     // V8 Booking status
-    booking_status: state.appointmentBooked ? 'confirmed' : 'not_requested',
+    booking_status: state.appointmentBooked
+      ? 'confirmed'
+      : state.bookingAttempted
+        ? 'attempted_failed'
+        : 'not_requested',
     // V10: Call type enrichment
     call_type: deriveCallType(classifyCall(state, retellData?.transcript, retellData?.start_timestamp), state).callType,
     is_commercial: state.propertyType === "commercial",
