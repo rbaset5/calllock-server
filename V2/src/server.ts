@@ -45,6 +45,8 @@ import {
 } from "./extraction/post-call.js";
 import { incrementStateVisit, isStateLooping } from "./state/conversation-state.js";
 import { inferHvacIssueType } from "./extraction/hvac-issue.js";
+import { buildCallScorecard } from "./extraction/call-scorecard.js";
+import { classifyCall } from "./classification/tags.js";
 
 // ===========================================
 // Test Phone Masking (toggle via MASK_TEST_PHONES env var)
@@ -530,6 +532,14 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
         conversationState.urgency = "Urgent";
       }
     }
+
+    // Level 1 instrumentation: call quality scorecard
+    const tags = classifyCall(conversationState, payload.call.transcript, payload.call.start_timestamp);
+    const scorecard = buildCallScorecard(conversationState, tags);
+    logger.info(
+      { callId, score: scorecard.score, fields: scorecard.fields, warnings: scorecard.warnings },
+      "Call quality scorecard"
+    );
 
     // Send to dashboard (job/lead)
     const dashboardResult = await sendJobToDashboard(conversationState, payload.call);
