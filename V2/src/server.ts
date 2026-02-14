@@ -45,6 +45,8 @@ import {
 } from "./extraction/post-call.js";
 import { incrementStateVisit, isStateLooping } from "./state/conversation-state.js";
 import { inferHvacIssueType } from "./extraction/hvac-issue.js";
+import { buildCallScorecard } from "./extraction/call-scorecard.js";
+import { classifyCall } from "./classification/tags.js";
 
 // ===========================================
 // Test Phone Masking (toggle via MASK_TEST_PHONES env var)
@@ -529,6 +531,28 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       if (!conversationState.urgency || conversationState.urgency === "Routine") {
         conversationState.urgency = "Urgent";
       }
+    }
+
+    // Level 1 instrumentation: call quality scorecard
+    const tags = classifyCall(conversationState, payload.call.transcript, payload.call.start_timestamp);
+    const scorecard = buildCallScorecard(conversationState, tags);
+    logger.info(
+      { callId, score: scorecard.score, fields: scorecard.fields, warnings: scorecard.warnings },
+      "Call quality scorecard"
+    );
+
+    if (scorecard.warnings.includes("zero-tags")) {
+      logger.warn(
+        { callId, transcript: Boolean(payload.call.transcript), problemDescription: conversationState.problemDescription },
+        "Zero taxonomy tags classified — check transcript quality or tag patterns"
+      );
+    }
+
+    if (scorecard.warnings.includes("callback-gap")) {
+      logger.warn(
+        { callId, endCallReason: conversationState.endCallReason, lastAgentState: conversationState.lastAgentState },
+        "Callback gap — call ended without booking or callback request"
+      );
     }
 
     // Send to dashboard (job/lead)
