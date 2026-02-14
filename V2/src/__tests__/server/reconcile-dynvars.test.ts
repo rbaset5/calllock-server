@@ -112,4 +112,28 @@ describe('reconcileDynamicVariables', () => {
     reconcileDynamicVariables(state, undefined);
     expect(state.customerName).toBe('Keep');
   });
+
+  it('maps urgency_tier "routine" to state.urgency "Routine"', () => {
+    const state = makeState();
+    reconcileDynamicVariables(state, { urgency_tier: 'routine' });
+    expect(state.urgency).toBe('Routine');
+  });
+
+  it('maps urgency_tier "emergency" to state.urgency "Emergency"', () => {
+    const state = makeState();
+    reconcileDynamicVariables(state, { urgency_tier: 'emergency' });
+    expect(state.urgency).toBe('Emergency');
+  });
+
+  it('maps urgency_tier "same_day" to state.urgency "Urgent"', () => {
+    const state = makeState();
+    reconcileDynamicVariables(state, { urgency_tier: 'same_day' });
+    expect(state.urgency).toBe('Urgent');
+  });
+
+  it('does NOT overwrite existing urgency', () => {
+    const state = makeState({ urgency: 'Emergency' });
+    reconcileDynamicVariables(state, { urgency_tier: 'routine' });
+    expect(state.urgency).toBe('Emergency');
+  });
 });
