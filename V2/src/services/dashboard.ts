@@ -110,6 +110,8 @@ export interface DashboardJobPayload {
   // V8 LLM-Generated Display Fields
   card_headline?: string;
   card_summary?: string;
+  // V11: Booking status tri-state
+  booking_status?: 'confirmed' | 'attempted_failed' | 'not_requested';
 }
 
 // mapUrgencyToDashboard moved to classification/call-type.ts
