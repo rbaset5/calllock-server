@@ -76,4 +76,37 @@ describe('classifyCall', () => {
     // "no" negates "gas smell" within 40 chars
     expect(tags.HAZARD).not.toContain('GAS_LEAK');
   });
+
+  // Duration tags (#38)
+  it('emits DURATION_ACUTE for "this morning" in transcript', () => {
+    const state = makeState();
+    const tags = classifyCall(state, 'Agent: How can I help?\nUser: My AC stopped working this morning.');
+    expect(tags.CONTEXT).toContain('DURATION_ACUTE');
+  });
+
+  it('emits DURATION_RECENT for "yesterday" in transcript', () => {
+    const state = makeState();
+    const tags = classifyCall(state, 'Agent: What happened?\nUser: Started acting up yesterday.');
+    expect(tags.CONTEXT).toContain('DURATION_RECENT');
+  });
+
+  it('emits DURATION_ONGOING for "a couple weeks" in transcript', () => {
+    const state = makeState();
+    const tags = classifyCall(state, 'Agent: How long?\nUser: Been going on a couple weeks now.');
+    expect(tags.CONTEXT).toContain('DURATION_ONGOING');
+  });
+
+  it('does not emit duration tag when no temporal phrase found', () => {
+    const state = makeState();
+    const tags = classifyCall(state, 'Agent: How can I help?\nUser: My AC is broken.');
+    expect(tags.CONTEXT.filter(t => t.startsWith('DURATION_'))).toEqual([]);
+  });
+
+  it('uses state.problemDurationCategory if already set (dynamic variable priority)', () => {
+    const state = makeState({ problemDurationCategory: 'ongoing' as const });
+    const tags = classifyCall(state, 'Agent: Hi.\nUser: Just happened this morning.');
+    // State takes priority over transcript extraction
+    expect(tags.CONTEXT).toContain('DURATION_ONGOING');
+    expect(tags.CONTEXT).not.toContain('DURATION_ACUTE');
+  });
 });

@@ -5,6 +5,7 @@
 
 import { ConversationState } from "../types/retell.js";
 import { createModuleLogger } from "../utils/logger.js";
+import { extractProblemDuration } from "../extraction/post-call.js";
 
 const log = createModuleLogger("tag-classifier");
 
@@ -301,6 +302,9 @@ const NON_CUSTOMER_PATTERNS = {
 // =============================================================================
 
 const CONTEXT_PATTERNS = {
+  DURATION_ACUTE: [], // Detected by extractProblemDuration
+  DURATION_RECENT: [], // Detected by extractProblemDuration
+  DURATION_ONGOING: [], // Detected by extractProblemDuration
   PEAK_SUMMER: [], // Detected by date
   PEAK_WINTER: [], // Detected by date
   HOLIDAY_WEEK: [], // Detected by date
@@ -461,6 +465,17 @@ export function classifyCall(
     if (patterns.some((p) => containsPhrase(textToAnalyze, p))) {
       tags.CONTEXT.push(tag);
     }
+  }
+
+  // Auto-tag duration from transcript extraction or state (#38)
+  const durationCategory = state.problemDurationCategory
+    || extractProblemDuration(transcript)?.category;
+  if (durationCategory === 'acute') {
+    tags.CONTEXT.push("DURATION_ACUTE");
+  } else if (durationCategory === 'recent') {
+    tags.CONTEXT.push("DURATION_RECENT");
+  } else if (durationCategory === 'ongoing') {
+    tags.CONTEXT.push("DURATION_ONGOING");
   }
 
   // Auto-tag seasonal context using call timestamp in business timezone (Central Time)
