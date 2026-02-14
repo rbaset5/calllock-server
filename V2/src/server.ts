@@ -547,9 +547,10 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
     }
 
     // Dead-end call detection: agent hung up at a scheduling state without booking or callback
+    // v10: "confirm" replaces old "urgency"/"pre_confirm"; "booking" kept as safety net
     const lastState = conversationState.lastAgentState
       || payload.call.collected_dynamic_variables?.current_agent_state;
-    const deadEndStates = ["urgency", "pre_confirm", "booking"];
+    const deadEndStates = ["confirm", "booking", "urgency", "pre_confirm"];
     if (
       payload.call.disconnection_reason === "agent_hangup" &&
       !conversationState.appointmentBooked &&
