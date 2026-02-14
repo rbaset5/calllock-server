@@ -5,6 +5,7 @@ import {
   mapUrgencyLevelFromAnalysis,
   extractAddressFromTranscript,
   mapDisconnectionReason,
+  extractProblemDuration,
 } from '../../extraction/post-call.js';
 
 describe('extractCustomerName', () => {
@@ -134,5 +135,125 @@ describe('extractAddressFromTranscript', () => {
 
   it('returns undefined for undefined', () => {
     expect(extractAddressFromTranscript()).toBeUndefined();
+  });
+});
+
+describe('extractProblemDuration', () => {
+  // Acute (<24h)
+  it('extracts "this morning" as acute', () => {
+    const transcript = 'Agent: How can I help?\nUser: Yeah my AC stopped working this morning.';
+    const result = extractProblemDuration(transcript);
+    expect(result).toEqual({ raw: 'this morning', category: 'acute' });
+  });
+
+  it('extracts "today" as acute', () => {
+    const transcript = 'Agent: What happened?\nUser: It just stopped working today.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('acute');
+  });
+
+  it('extracts "just started" as acute', () => {
+    const transcript = 'Agent: Tell me more.\nUser: The noise just started about an hour ago.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('acute');
+  });
+
+  it('extracts "a few hours" as acute', () => {
+    const transcript = 'Agent: How long?\nUser: It has been making that sound for a few hours.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('acute');
+  });
+
+  it('extracts "tonight" as acute', () => {
+    const transcript = 'Agent: When did it start?\nUser: The heater stopped tonight.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('acute');
+  });
+
+  // Recent (1-7d)
+  it('extracts "yesterday" as recent', () => {
+    const transcript = 'Agent: What is going on?\nUser: Started acting up yesterday.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('recent');
+  });
+
+  it('extracts "2 days" as recent', () => {
+    const transcript = 'Agent: How long?\nUser: It has been about 2 days now.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('recent');
+  });
+
+  it('extracts "since Monday" as recent', () => {
+    const transcript = 'Agent: When did this start?\nUser: Since Monday it has been leaking.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('recent');
+  });
+
+  it('extracts "a few days" as recent', () => {
+    const transcript = 'Agent: How long?\nUser: A few days now, maybe three or four.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('recent');
+  });
+
+  it('extracts "this week" as recent', () => {
+    const transcript = 'Agent: Tell me more.\nUser: It started doing this earlier this week.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('recent');
+  });
+
+  // Ongoing (>7d)
+  it('extracts "a couple weeks" as ongoing', () => {
+    const transcript = 'Agent: How long?\nUser: Been going on a couple weeks now.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('ongoing');
+  });
+
+  it('extracts "a month" as ongoing', () => {
+    const transcript = 'Agent: When did you notice?\nUser: About a month ago it started.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('ongoing');
+  });
+
+  it('extracts "for years" as ongoing', () => {
+    const transcript = 'Agent: Tell me more.\nUser: This has been a problem for years honestly.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('ongoing');
+  });
+
+  it('extracts "a while" as ongoing', () => {
+    const transcript = 'Agent: How long has this been happening?\nUser: It has been going on for a while now.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('ongoing');
+  });
+
+  it('extracts "for some time" as ongoing', () => {
+    const transcript = 'Agent: When?\nUser: This has been happening for some time.';
+    const result = extractProblemDuration(transcript);
+    expect(result?.category).toBe('ongoing');
+  });
+
+  // Edge cases
+  it('returns undefined when no temporal phrase found', () => {
+    const transcript = 'Agent: How can I help?\nUser: My AC is not working.';
+    expect(extractProblemDuration(transcript)).toBeUndefined();
+  });
+
+  it('returns undefined for undefined transcript', () => {
+    expect(extractProblemDuration(undefined)).toBeUndefined();
+  });
+
+  it('returns undefined for empty transcript', () => {
+    expect(extractProblemDuration('')).toBeUndefined();
+  });
+
+  it('ignores agent utterances — agent saying "how long" does not match', () => {
+    const transcript = 'Agent: How long has this been going on since this morning?\nUser: My AC is broken.';
+    expect(extractProblemDuration(transcript)).toBeUndefined();
+  });
+
+  it('extracts from user line even with agent temporal phrase', () => {
+    const transcript = 'Agent: How long has this been happening?\nUser: Since yesterday the unit has been making noise.';
+    const result = extractProblemDuration(transcript);
+    expect(result).toEqual({ raw: 'yesterday', category: 'recent' });
   });
 });
