@@ -40,6 +40,33 @@ describe('card_summary booking wording', () => {
     expect(payload.card_summary).toMatch(/[Aa]ppointment booked/);
   });
 
+  it('says "Has existing appointment" when appointmentBooked but no booking attempted', () => {
+    const state = makeState({
+      customerName: 'Jonas',
+      problemDescription: 'AC issue, dead rat in vent',
+      appointmentBooked: true,
+      bookingAttempted: false,
+      endCallReason: 'callback_later',
+    });
+    const retellData = { transcript: 'dead rat in air vent' } as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    expect(payload.card_summary).toContain('Has existing appointment');
+    expect(payload.card_summary).not.toContain('Appointment booked');
+  });
+
+  it('says "Appointment booked for {dateTime}" only when bookingAttempted', () => {
+    const state = makeState({
+      customerName: 'Jonas',
+      problemDescription: 'AC repair',
+      appointmentBooked: true,
+      bookingAttempted: true,
+      appointmentDateTime: '2026-02-19 3:45 PM',
+    });
+    const retellData = { transcript: 'AC repair' } as RetellPostCallData;
+    const payload = transformToDashboardPayload(state, retellData);
+    expect(payload.card_summary).toContain('Appointment booked for 2026-02-19 3:45 PM');
+  });
+
   it('says "Callback requested" for callback_later without booking attempt', () => {
     const state = makeState({
       customerName: 'Jonas',

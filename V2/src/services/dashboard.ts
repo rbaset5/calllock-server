@@ -412,10 +412,12 @@ function buildCardSummary(
   }
 
   // Booking outcome
-  if (state.appointmentBooked && state.appointmentDateTime) {
+  if (state.appointmentBooked && state.appointmentDateTime && state.bookingAttempted) {
     parts.push(`Appointment booked for ${state.appointmentDateTime}.`);
-  } else if (state.appointmentBooked) {
+  } else if (state.appointmentBooked && state.bookingAttempted) {
     parts.push("Appointment booked.");
+  } else if (state.appointmentBooked) {
+    parts.push("Has existing appointment.");
   } else if (state.bookingAttempted) {
     parts.push("Booking failed, callback requested.");
   } else if (state.endCallReason === "callback_later") {
