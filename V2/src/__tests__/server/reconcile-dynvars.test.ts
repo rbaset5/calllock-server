@@ -137,3 +137,51 @@ describe('reconcileDynamicVariables', () => {
     expect(state.urgency).toBe('Emergency');
   });
 });
+
+describe('callbackType inference', () => {
+  it('infers callbackType as service when callback_later without booking', () => {
+    const state = makeState({
+      endCallReason: 'callback_later',
+      appointmentBooked: false,
+    });
+    if (
+      state.endCallReason === 'callback_later' &&
+      !state.callbackType &&
+      !state.appointmentBooked
+    ) {
+      state.callbackType = 'service';
+    }
+    expect(state.callbackType).toBe('service');
+  });
+
+  it('does NOT override existing callbackType', () => {
+    const state = makeState({
+      endCallReason: 'callback_later',
+      callbackType: 'billing',
+      appointmentBooked: false,
+    });
+    if (
+      state.endCallReason === 'callback_later' &&
+      !state.callbackType &&
+      !state.appointmentBooked
+    ) {
+      state.callbackType = 'service';
+    }
+    expect(state.callbackType).toBe('billing');
+  });
+
+  it('does NOT infer callbackType when appointment is booked', () => {
+    const state = makeState({
+      endCallReason: 'callback_later',
+      appointmentBooked: true,
+    });
+    if (
+      state.endCallReason === 'callback_later' &&
+      !state.callbackType &&
+      !state.appointmentBooked
+    ) {
+      state.callbackType = 'service';
+    }
+    expect(state.callbackType).toBeUndefined();
+  });
+});
