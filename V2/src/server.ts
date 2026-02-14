@@ -546,6 +546,7 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
     // Level 1 instrumentation: call quality scorecard
     const tags = classifyCall(conversationState, payload.call.transcript, payload.call.start_timestamp);
     const scorecard = buildCallScorecard(conversationState, tags);
+    conversationState.qualityScore = scorecard.score;
     logger.info(
       { callId, score: scorecard.score, fields: scorecard.fields, warnings: scorecard.warnings },
       "Call quality scorecard"

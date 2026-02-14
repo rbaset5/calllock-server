@@ -276,7 +276,12 @@ function deriveCallerType(
     if (tags.NON_CUSTOMER.includes("JOB_APPLICANT")) return "recruiting";
     if (tags.NON_CUSTOMER.includes("VENDOR_SALES") || tags.NON_CUSTOMER.includes("SPAM_TELEMARKETING")) return "vendor";
     if (tags.CUSTOMER.length > 0) return "residential";
+    // Default to residential when service tags are present (#37)
+    // Standard calls to an HVAC company are residential unless proven otherwise
+    if (tags.SERVICE_TYPE.length > 0) return "residential";
   }
+  // Default to residential if caller described a problem (they're a customer)
+  if (state.problemDescription) return "residential";
   return "unknown";
 }
 
@@ -296,44 +301,126 @@ function derivePrimaryIntent(
 }
 
 /**
- * Build a short headline for dashboard card display
+ * Map a SERVICE_TYPE tag to a human-readable service label
  */
-function buildCardHeadline(
-  state: ConversationState,
-  retellData?: RetellPostCallData
-): string | undefined {
-  const summary = retellData?.call_analysis?.call_summary;
-  if (summary) {
-    const firstSentence = summary.split(/[.!?]/)[0]?.trim();
-    if (firstSentence && firstSentence.length > 0) {
-      return firstSentence.length > 60 ? firstSentence.substring(0, 57) + "..." : firstSentence;
-    }
-  }
-  if (state.problemDescription) {
-    return state.problemDescription.length > 60
-      ? state.problemDescription.substring(0, 57) + "..."
-      : state.problemDescription;
-  }
-  return undefined;
+function serviceTagToLabel(tag: string): string {
+  const map: Record<string, string> = {
+    REPAIR_AC: "AC Repair",
+    REPAIR_HEATING: "Heating Repair",
+    REPAIR_HEATPUMP: "Heat Pump Repair",
+    REPAIR_THERMOSTAT: "Thermostat Repair",
+    REPAIR_IAQ: "IAQ Repair",
+    REPAIR_DUCTWORK: "Ductwork Repair",
+    TUNEUP_AC: "AC Tune-Up",
+    TUNEUP_HEATING: "Heating Tune-Up",
+    DUCT_CLEANING: "Duct Cleaning",
+    FILTER_SERVICE: "Filter Service",
+    INSTALL_REPLACEMENT: "System Replacement",
+    INSTALL_NEWCONSTRUCTION: "New Construction Install",
+    INSTALL_UPGRADE: "System Upgrade",
+    INSTALL_ADDON: "Add-On Install",
+    DIAGNOSTIC_INTERMITTENT: "Intermittent Issue",
+    DIAGNOSTIC_PERFORMANCE: "Performance Issue",
+    DIAGNOSTIC_NOISE: "Noise Diagnostic",
+    DIAGNOSTIC_CYCLE: "Cycling Issue",
+    DIAGNOSTIC_AIRFLOW: "Airflow Issue",
+    DIAGNOSTIC_SMELL: "Odor Diagnostic",
+    DIAGNOSTIC_ENERGY: "Energy Audit",
+    SECONDOPINION: "Second Opinion",
+    WARRANTY_CLAIM: "Warranty Claim",
+  };
+  return map[tag] || tag.replace(/_/g, " ").toLowerCase();
 }
 
 /**
- * Build a summary paragraph for dashboard card display
+ * Build a short headline for dashboard card display (#33)
+ * Template-based — never uses call_summary (that's reserved for ai_summary)
+ */
+function buildCardHeadline(
+  state: ConversationState,
+  tags: TaxonomyTags | null,
+  equipmentType?: string,
+  urgency?: string
+): string | undefined {
+  const parts: string[] = [];
+
+  // Service label from tags or call metadata
+  if (tags && tags.SERVICE_TYPE.length > 0) {
+    parts.push(serviceTagToLabel(tags.SERVICE_TYPE[0]));
+  } else if (state.hvacIssueType) {
+    parts.push(state.hvacIssueType);
+  }
+
+  // Equipment context
+  const equip = equipmentType && equipmentType !== "unknown" ? equipmentType : undefined;
+  if (equip && !parts[0]?.toLowerCase().includes(equip.toLowerCase())) {
+    parts.push(equip);
+  }
+
+  // Urgency badge for high/emergency
+  if (urgency === "high" || urgency === "emergency") {
+    parts.push(urgency === "emergency" ? "EMERGENCY" : "URGENT");
+  }
+
+  if (parts.length === 0) {
+    // Fallback to problem description
+    if (state.problemDescription) {
+      const desc = state.problemDescription;
+      return desc.length > 60 ? desc.substring(0, 57) + "..." : desc;
+    }
+    return undefined;
+  }
+
+  // Join with " — " between service+equipment and " | " before urgency badge
+  let headline: string;
+  if (parts.length >= 3) {
+    headline = `${parts[0]} — ${parts[1]} | ${parts[2]}`;
+  } else if (parts.length === 2 && (parts[1] === "URGENT" || parts[1] === "EMERGENCY")) {
+    headline = `${parts[0]} | ${parts[1]}`;
+  } else {
+    headline = parts.join(" — ");
+  }
+
+  return headline.length > 60 ? headline.substring(0, 57) + "..." : headline;
+}
+
+/**
+ * Build an action-oriented summary for dashboard card display (#34)
+ * Constructed from state fields — never uses call_summary (that's reserved for ai_summary)
  */
 function buildCardSummary(
   state: ConversationState,
-  retellData?: RetellPostCallData
+  urgency?: string
 ): string | undefined {
-  const summary = retellData?.call_analysis?.call_summary;
-  if (summary) {
-    return summary.length > 200 ? summary.substring(0, 197) + "..." : summary;
-  }
   const parts: string[] = [];
-  if (state.problemDescription) parts.push(state.problemDescription);
-  if (state.urgencyTier === "LifeSafety") parts.push("Life safety emergency.");
-  else if (state.urgencyTier === "Urgent") parts.push("Urgent service needed.");
-  if (state.equipmentType) parts.push(`Equipment: ${state.equipmentType}.`);
-  if (state.equipmentAge) parts.push(`Age: ${state.equipmentAge}.`);
+
+  // Caller + problem
+  const who = state.customerName || "Caller";
+  if (state.problemDescription) {
+    parts.push(`${who} called about ${state.problemDescription}.`);
+  }
+
+  // Booking outcome
+  if (state.appointmentBooked && state.appointmentDateTime) {
+    parts.push(`Appointment booked for ${state.appointmentDateTime}.`);
+  } else if (state.appointmentBooked) {
+    parts.push("Appointment booked.");
+  } else if (state.endCallReason === "callback_later") {
+    parts.push("Callback requested.");
+  }
+
+  // Urgency context
+  if (urgency === "emergency") {
+    parts.push("Flagged as emergency.");
+  } else if (urgency === "high") {
+    parts.push("Flagged as urgent.");
+  }
+
+  if (parts.length === 0) {
+    // Fallback: assemble from equipment info
+    if (state.equipmentType) parts.push(`Equipment: ${state.equipmentType}.`);
+    if (state.equipmentAge) parts.push(`Age: ${state.equipmentAge}.`);
+  }
 
   const combined = parts.join(" ");
   if (combined.length === 0) return undefined;
@@ -348,7 +435,7 @@ function extractEquipmentTypeFromTranscript(transcript?: string): string | undef
   const text = transcript.toLowerCase();
 
   const patterns: [RegExp, string][] = [
-    [/\b(air\s*condition(?:er|ing)?|a\.?c\.?\s*unit|central\s*air)\b/i, "AC"],
+    [/\b(air\s*condition(?:er|ing)?|a\.?c\.?\s*unit|central\s*air|\bac\b)\b/i, "AC"],
     [/\b(furnace|heater)\b/i, "furnace"],
     [/\b(heat\s*pump)\b/i, "heat pump"],
     [/\b(boiler)\b/i, "boiler"],
@@ -399,8 +486,19 @@ export function transformToDashboardPayload(
   const workType = deriveWorkType(state, tags);
   const callerType = deriveCallerType(state, tags);
   const primaryIntent = derivePrimaryIntent(state, tags);
-  const cardHeadline = buildCardHeadline(state, retellData);
-  const cardSummary = buildCardSummary(state, retellData);
+
+  // call_subtype fallback for equipment_type (#35)
+  const equipmentFromSubtype = callTypeResult.callSubtype
+    ? ({ ac: "AC", heating: "furnace", heatpump: "heat pump" } as Record<string, string>)[callTypeResult.callSubtype]
+    : undefined;
+
+  // Compute shared derived values for card display (#33/#34)
+  const equipType = state.equipmentType
+    || extractEquipmentTypeFromTranscript(retellData?.transcript)
+    || equipmentFromSubtype;
+  const dashboardUrgency = mapUrgencyToDashboard({ urgencyTier: state.urgencyTier, urgencyLevel: state.urgency, endCallReason: state.endCallReason });
+  const cardHeadline = buildCardHeadline(state, tags, equipType, dashboardUrgency);
+  const cardSummary = buildCardSummary(state, dashboardUrgency);
 
   // For sales leads, create a descriptive title from equipment info
   const issueDescription = state.endCallReason === "sales_lead"
@@ -442,7 +540,7 @@ export function transformToDashboardPayload(
     end_call_reason: state.endCallReason,
     issue_description: issueDescription,
     // Sales lead specific fields
-    equipment_type: state.equipmentType || extractEquipmentTypeFromTranscript(retellData?.transcript) || "unknown",
+    equipment_type: equipType || "unknown",
     equipment_age: state.equipmentAge,
     sales_lead_notes: state.salesLeadNotes,
     // Diagnostic context fields
@@ -592,6 +690,8 @@ export interface DashboardCallPayload {
   // Call analysis fields from Retell
   call_summary?: string;
   sentiment?: string;
+  // V11: Quality scorecard (#39)
+  quality_score?: number;
   user_email: string;
 }
 
@@ -663,6 +763,8 @@ export async function sendCallToDashboard(
     // Call analysis from Retell's post-call AI
     call_summary: retellData?.call_analysis?.call_summary,
     sentiment: retellData?.call_analysis?.user_sentiment,
+    // V11: Quality scorecard (#39)
+    quality_score: state.qualityScore,
     user_email: DASHBOARD_USER_EMAIL!,
   };
 

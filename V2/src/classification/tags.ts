@@ -487,6 +487,18 @@ export function classifyCall(
     tags.CONTEXT.push("WEEKEND");
   }
 
+  // Auto-emit urgency tags from state.urgency when transcript matching found nothing (#36).
+  // The voice agent may flag urgency via dynamic variables even when the transcript
+  // doesn't contain specific urgency keyword phrases.
+  if (tags.URGENCY.length === 0) {
+    const u = state.urgency?.toLowerCase();
+    if (u === 'emergency' || u === 'lifesafety') {
+      tags.URGENCY.push('EMERGENCY_SAMEDAY');
+    } else if (u === 'urgent' || u === 'high') {
+      tags.URGENCY.push('URGENT_24HR');
+    }
+  }
+
   // Log classification summary
   const totalTags = Object.values(tags).flat().length;
   log.info(
