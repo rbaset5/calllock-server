@@ -299,6 +299,8 @@ export interface ConversationState {
   appointmentDateTime?: string;
   endCallReason?: EndCallReason;
   lastAgentState?: string;          // Last agent state for dead-end call detection
+  callerKnown?: boolean;             // True if customer found in history lookup
+  syncedToDashboard?: boolean;       // True if already synced (idempotency guard)
   isSafetyEmergency: boolean;
   isUrgentEscalation: boolean;
   // V11: State loop guardrails (#19)
