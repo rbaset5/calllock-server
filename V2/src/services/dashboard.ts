@@ -471,7 +471,7 @@ export function transformToDashboardPayload(
   const estimate = estimateRevenue(state, userSpeech);
 
   // Detect priority color for V4 dashboard
-  const priority = detectPriority(state, retellData?.transcript, estimate);
+  const priority = detectPriority(state, retellData?.transcript, estimate, retellData?.call_analysis?.user_sentiment);
 
   // V6: Classify call with HVAC Smart Tag Taxonomy
   const tags = classifyCall(state, retellData?.transcript, retellData?.start_timestamp);
@@ -713,7 +713,7 @@ export async function sendCallToDashboard(
   const estimate = estimateRevenue(state);
 
   // Detect priority for call record
-  const priority = detectPriority(state, retellData?.transcript, estimate);
+  const priority = detectPriority(state, retellData?.transcript, estimate, retellData?.call_analysis?.user_sentiment);
 
   // Calculate duration if we have both start and end times
   let durationSeconds: number | undefined;
