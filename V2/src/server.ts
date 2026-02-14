@@ -564,6 +564,19 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       !conversationState.appointmentBooked
     ) {
       conversationState.callbackType = "service";
+
+      // Fire the SMS that create_callback would have sent
+      try {
+        await sendEmergencyAlert({
+          urgencyDescription: `Callback requested: booking failed, agent promised callback`,
+          callerPhone: conversationState.customerPhone || "Unknown",
+          address: conversationState.serviceAddress || "Not provided",
+          callbackMinutes: 60,
+        });
+        logger.info({ callId }, "Inferred callback SMS sent");
+      } catch (smsError) {
+        logger.warn({ callId, error: smsError }, "Inferred callback SMS failed (non-fatal)");
+      }
     }
 
     // Level 1 instrumentation: call quality scorecard
