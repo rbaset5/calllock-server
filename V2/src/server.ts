@@ -436,6 +436,12 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
     // Retrieve the saved conversation state, or extract from webhook data
     let conversationState = await getCallSession(callId);
 
+    // Idempotency: skip if already synced to dashboard
+    if (conversationState?.syncedToDashboard) {
+      logger.info({ callId }, "Already processed — skipping duplicate call_analyzed");
+      return res.json({ success: true, message: "Already processed" });
+    }
+
     if (!conversationState) {
       // No saved session - extract data from post-call webhook payload
       logger.info({ callId }, "No session found, extracting from webhook data");
