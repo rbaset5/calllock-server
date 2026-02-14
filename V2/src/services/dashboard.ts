@@ -587,6 +587,12 @@ export function transformToDashboardPayload(
     primary_intent: primaryIntent,
     card_headline: cardHeadline,
     card_summary: cardSummary,
+    // V11: Booking status tri-state
+    booking_status: state.appointmentBooked
+      ? 'confirmed'
+      : state.bookingAttempted
+        ? 'attempted_failed'
+        : 'not_requested',
   };
 }
 
