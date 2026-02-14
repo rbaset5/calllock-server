@@ -135,6 +135,26 @@ describe('card_summary differentiation (#34)', () => {
   });
 });
 
+describe('booking_status in job payload (#47)', () => {
+  it('returns confirmed when appointmentBooked is true', () => {
+    const state = makeState({ appointmentBooked: true });
+    const payload = transformToDashboardPayload(state);
+    expect(payload.booking_status).toBe('confirmed');
+  });
+
+  it('returns attempted_failed when bookingAttempted but not booked', () => {
+    const state = makeState({ bookingAttempted: true, appointmentBooked: false });
+    const payload = transformToDashboardPayload(state);
+    expect(payload.booking_status).toBe('attempted_failed');
+  });
+
+  it('returns not_requested when neither attempted nor booked', () => {
+    const state = makeState({ bookingAttempted: false, appointmentBooked: false });
+    const payload = transformToDashboardPayload(state);
+    expect(payload.booking_status).toBe('not_requested');
+  });
+});
+
 describe('quality_score persistence (#39)', () => {
   it('qualityScore on ConversationState type accepts a number', () => {
     const state = makeState({ qualityScore: 80 });

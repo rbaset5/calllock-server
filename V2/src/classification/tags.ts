@@ -163,7 +163,7 @@ const URGENCY_PATTERNS = {
 
 const SERVICE_TYPE_PATTERNS = {
   // Repair Subcategory
-  REPAIR_AC: ["ac not cooling", "warm air", "air conditioner broken", "ac issue"],
+  REPAIR_AC: ["ac not cooling", "warm air", "air conditioner broken", "ac issue", "hvac issue", "hvac unit", "ac unit", "ac problem"],
   REPAIR_HEATING: ["furnace not working", "no heat", "heater broken", "heat not working"],
   REPAIR_HEATPUMP: ["heat pump", "mode switching", "reversing valve"],
   REPAIR_THERMOSTAT: ["thermostat", "blank display", "won't change temp"],

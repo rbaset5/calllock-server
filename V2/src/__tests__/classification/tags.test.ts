@@ -129,4 +129,22 @@ describe('classifyCall', () => {
     expect(tags.CONTEXT).toContain('DURATION_ONGOING');
     expect(tags.CONTEXT).not.toContain('DURATION_ACUTE');
   });
+
+  it('detects REPAIR_AC from "hvac unit issue" phrasing', () => {
+    const state = makeState({ problemDescription: 'AC heating HVAC unit issue' });
+    const tags = classifyCall(state, 'report issue with my AC heating HVAC unit');
+    expect(tags.SERVICE_TYPE).toContain('REPAIR_AC');
+  });
+
+  it('detects REPAIR_AC from "ac unit" phrasing', () => {
+    const state = makeState({ problemDescription: 'my ac unit stopped working' });
+    const tags = classifyCall(state, 'my ac unit stopped working');
+    expect(tags.SERVICE_TYPE).toContain('REPAIR_AC');
+  });
+
+  it('detects REPAIR_AC from "hvac issue" phrasing', () => {
+    const state = makeState({ problemDescription: 'hvac issue reported' });
+    const tags = classifyCall(state, 'I have a hvac issue');
+    expect(tags.SERVICE_TYPE).toContain('REPAIR_AC');
+  });
 });

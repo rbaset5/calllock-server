@@ -414,6 +414,8 @@ function buildCardSummary(
     parts.push(`Appointment booked for ${state.appointmentDateTime}.`);
   } else if (state.appointmentBooked) {
     parts.push("Appointment booked.");
+  } else if (state.bookingAttempted) {
+    parts.push("Booking failed, callback requested.");
   } else if (state.endCallReason === "callback_later") {
     parts.push("Callback requested.");
   }
@@ -587,6 +589,12 @@ export function transformToDashboardPayload(
     primary_intent: primaryIntent,
     card_headline: cardHeadline,
     card_summary: cardSummary,
+    // V11: Booking status tri-state
+    booking_status: state.appointmentBooked
+      ? 'confirmed'
+      : state.bookingAttempted
+        ? 'attempted_failed'
+        : 'not_requested',
   };
 }
 
