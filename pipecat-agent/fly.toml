@@ -1,22 +1,34 @@
-app = "calllock-voice"
-primary_region = "dfw"
+# fly.toml app configuration file generated for calllock-voice on 2026-02-15T11:10:10-05:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'calllock-voice'
+primary_region = 'dfw'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  PORT = "8765"
+  PORT = '8765'
 
 [http_service]
   internal_port = 8765
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
 
 [[services]]
+  protocol = 'tcp'
   internal_port = 8765
-  protocol = "tcp"
+
   [[services.ports]]
     port = 443
-    handlers = ["tls", "http"]
+    handlers = ['tls', 'http']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 1024
