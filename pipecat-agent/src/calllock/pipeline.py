@@ -4,7 +4,7 @@ from fastapi import WebSocket
 
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineTask
+from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
     FastAPIWebsocketParams,
@@ -98,7 +98,13 @@ async def create_pipeline(websocket: WebSocket):
         context_aggregator.assistant(),
     ])
 
-    task = PipelineTask(pipeline)
+    task = PipelineTask(
+        pipeline,
+        params=PipelineParams(
+            audio_in_sample_rate=8000,
+            audio_out_sample_rate=16000,
+        ),
+    )
 
     # Send initial greeting on connect
     @transport.event_handler("on_client_connected")
