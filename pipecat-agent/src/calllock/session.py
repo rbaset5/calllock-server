@@ -28,6 +28,9 @@ class CallSession:
     booking_confirmed: bool = False
     booked_time: str = ""
 
+    # From callback
+    callback_created: bool = False
+
     # Metadata
     turn_count: int = 0
     state_turn_count: int = 0
