@@ -21,6 +21,7 @@ from calllock.session import CallSession
 from calllock.state_machine import StateMachine
 from calllock.prompts import get_system_prompt
 from calllock.tools import V2Client
+from calllock.processor import StateMachineProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +78,19 @@ async def create_pipeline(websocket: WebSocket):
     context = OpenAILLMContext(messages)
     context_aggregator = llm.create_context_aggregator(context)
 
-    # Build pipeline
+    # State machine processor — intercepts transcriptions before LLM
+    sm_processor = StateMachineProcessor(
+        session=session,
+        machine=machine,
+        tools=tools,
+        context=context,
+    )
+
+    # Build pipeline: STT -> StateMachine -> ContextAgg -> LLM -> TTS
     pipeline = Pipeline([
         transport.input(),
         stt,
+        sm_processor,
         context_aggregator.user(),
         llm,
         tts,
