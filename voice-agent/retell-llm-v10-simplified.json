@@ -450,7 +450,7 @@
           "query_params": {},
           "description": "Books an HVAC service appointment. Checks availability and books in one step. Returns confirmation or alternative times if requested slot unavailable.",
           "type": "custom",
-          "url": "https://calllock-dashboard-2.vercel.app/api/retell/book-service",
+          "url": "https://app.calllock.co/api/retell/book-service",
           "args_at_root": false,
           "timeout_ms": 15000,
           "speak_after_execution": true,
