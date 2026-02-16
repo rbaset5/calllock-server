@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 from fastapi import WebSocket
 
@@ -23,6 +24,7 @@ from calllock.prompts import get_system_prompt
 from calllock.tools import V2Client
 from calllock.processor import StateMachineProcessor
 from calllock.audio_resample import AudioResampleProcessor
+from calllock.post_call import handle_call_ended
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,8 @@ async def create_pipeline(websocket: WebSocket):
 
     # Initialize session and state machine
     session = CallSession(phone_number=caller_phone)
+    session.call_sid = call_sid
+    session.start_time = time.time()
     machine = StateMachine()
     tools = V2Client(base_url=os.getenv("V2_BACKEND_URL", ""))
 
@@ -118,5 +122,11 @@ async def create_pipeline(websocket: WebSocket):
 
     runner = PipelineRunner()
     await runner.run(task)
+
+    # Post-call: classify and sync to dashboard
+    try:
+        await handle_call_ended(session)
+    except Exception as e:
+        logger.error(f"Post-call handler failed: {e}")
 
     logger.info(f"Call ended: {call_sid}")
