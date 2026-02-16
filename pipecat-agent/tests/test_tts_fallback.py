@@ -17,7 +17,8 @@ from pipecat.frames.frames import (
 )
 from pipecat.services.tts_service import TTSService
 
-from calllock.tts_fallback import CircuitBreaker, FallbackTTSService
+from calllock.circuit_breaker import CircuitBreaker
+from calllock.tts_fallback import FallbackTTSService
 
 
 # ---------------------------------------------------------------------------

@@ -1,12 +1,26 @@
+import logging
 import os
-import uvicorn
-from dotenv import load_dotenv
-from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import PlainTextResponse, Response
 
-from calllock.pipeline import create_pipeline
+# --- Structured logging (Fix 4) ---
+# Must be configured before any other module imports so all loggers inherit it.
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+import uvicorn  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+from fastapi import FastAPI, Request, WebSocket  # noqa: E402
+from fastapi.responses import PlainTextResponse, Response  # noqa: E402
 
 load_dotenv()
+
+# --- Env var validation (Fix 1) ---
+from calllock.config import validate_config  # noqa: E402
+validate_config()
+
+from calllock.pipeline import create_pipeline  # noqa: E402
 
 app = FastAPI(title="CallLock Voice Agent")
 

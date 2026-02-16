@@ -7,16 +7,17 @@ from calllock.dashboard_sync import DashboardClient
 @pytest.fixture
 def dashboard():
     return DashboardClient(
-        webhook_url="https://app.example.com/api/webhook/jobs",
+        jobs_url="https://app.example.com/api/webhook/jobs",
+        calls_url="https://app.example.com/api/webhook/calls",
+        alerts_url="https://app.example.com/api/webhook/emergency-alerts",
         webhook_secret="test-secret-123",
     )
 
 
 class TestDashboardClient:
-    def test_derives_calls_url(self, dashboard):
+    def test_urls_set_correctly(self, dashboard):
+        assert dashboard.jobs_url == "https://app.example.com/api/webhook/jobs"
         assert dashboard.calls_url == "https://app.example.com/api/webhook/calls"
-
-    def test_derives_alerts_url(self, dashboard):
         assert dashboard.alerts_url == "https://app.example.com/api/webhook/emergency-alerts"
 
 

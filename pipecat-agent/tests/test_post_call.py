@@ -102,7 +102,9 @@ class TestHandleCallEnded:
     @respx.mock
     @pytest.mark.asyncio
     async def test_sends_job_and_call(self, completed_session, monkeypatch):
-        monkeypatch.setenv("DASHBOARD_WEBHOOK_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_JOBS_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_CALLS_URL", "https://app.example.com/api/webhook/calls")
+        monkeypatch.setenv("DASHBOARD_ALERTS_URL", "https://app.example.com/api/webhook/emergency-alerts")
         monkeypatch.setenv("DASHBOARD_WEBHOOK_SECRET", "test-secret")
         monkeypatch.setenv("DASHBOARD_USER_EMAIL", "owner@test.com")
 
@@ -121,7 +123,9 @@ class TestHandleCallEnded:
     @respx.mock
     @pytest.mark.asyncio
     async def test_safety_exit_sends_emergency_alert(self, safety_session, monkeypatch):
-        monkeypatch.setenv("DASHBOARD_WEBHOOK_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_JOBS_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_CALLS_URL", "https://app.example.com/api/webhook/calls")
+        monkeypatch.setenv("DASHBOARD_ALERTS_URL", "https://app.example.com/api/webhook/emergency-alerts")
         monkeypatch.setenv("DASHBOARD_WEBHOOK_SECRET", "test-secret")
         monkeypatch.setenv("DASHBOARD_USER_EMAIL", "owner@test.com")
 
@@ -142,7 +146,9 @@ class TestHandleCallEnded:
     @respx.mock
     @pytest.mark.asyncio
     async def test_non_safety_does_not_send_alert(self, completed_session, monkeypatch):
-        monkeypatch.setenv("DASHBOARD_WEBHOOK_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_JOBS_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_CALLS_URL", "https://app.example.com/api/webhook/calls")
+        monkeypatch.setenv("DASHBOARD_ALERTS_URL", "https://app.example.com/api/webhook/emergency-alerts")
         monkeypatch.setenv("DASHBOARD_WEBHOOK_SECRET", "test-secret")
         monkeypatch.setenv("DASHBOARD_USER_EMAIL", "owner@test.com")
 
@@ -163,7 +169,9 @@ class TestHandleCallEnded:
     @respx.mock
     @pytest.mark.asyncio
     async def test_survives_webhook_failure(self, completed_session, monkeypatch):
-        monkeypatch.setenv("DASHBOARD_WEBHOOK_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_JOBS_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_CALLS_URL", "https://app.example.com/api/webhook/calls")
+        monkeypatch.setenv("DASHBOARD_ALERTS_URL", "https://app.example.com/api/webhook/emergency-alerts")
         monkeypatch.setenv("DASHBOARD_WEBHOOK_SECRET", "test-secret")
         monkeypatch.setenv("DASHBOARD_USER_EMAIL", "owner@test.com")
 

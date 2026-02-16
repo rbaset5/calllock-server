@@ -1,17 +1,32 @@
 import httpx
 import logging
 
+from calllock.circuit_breaker import CircuitBreaker
+
 logger = logging.getLogger(__name__)
 
 
 class V2Client:
-    """HTTP client for the V2 backend tool endpoints."""
+    """HTTP client for the V2 backend tool endpoints.
+
+    Wraps each call with a circuit breaker: after 3 consecutive failures,
+    V2 calls are skipped for 60s and graceful fallback responses are returned
+    so the state machine can route to callback instead of hanging.
+    """
 
     def __init__(self, base_url: str, timeout: float = 10.0):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self._circuit = CircuitBreaker(
+            failure_threshold=3,
+            cooldown_seconds=60.0,
+            label="V2 backend",
+        )
 
     async def lookup_caller(self, phone: str, call_id: str) -> dict:
+        if not self._circuit.should_try():
+            logger.warning("V2 circuit breaker open — returning unknown caller")
+            return {"found": False, "message": "V2 backend unavailable — proceeding without history."}
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(
@@ -26,9 +41,11 @@ class V2Client:
                     },
                 )
                 resp.raise_for_status()
+                self._circuit.record_success()
                 return resp.json()
         except Exception as e:
-            logger.error(f"lookup_caller failed: {e}")
+            self._circuit.record_failure()
+            logger.error("lookup_caller failed: %s", e)
             return {"found": False, "message": "Lookup failed — proceeding without history."}
 
     async def book_service(
@@ -39,6 +56,9 @@ class V2Client:
         preferred_time: str,
         phone: str,
     ) -> dict:
+        if not self._circuit.should_try():
+            logger.warning("V2 circuit breaker open — returning booking failure")
+            return {"booked": False, "error": "V2 backend unavailable"}
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(
@@ -52,9 +72,11 @@ class V2Client:
                     },
                 )
                 resp.raise_for_status()
+                self._circuit.record_success()
                 return resp.json()
         except Exception as e:
-            logger.error(f"book_service failed: {e}")
+            self._circuit.record_failure()
+            logger.error("book_service failed: %s", e)
             return {"booked": False, "error": str(e)}
 
     async def create_callback(
@@ -63,6 +85,9 @@ class V2Client:
         callback_type: str = "service",
         reason: str = "",
     ) -> dict:
+        if not self._circuit.should_try():
+            logger.warning("V2 circuit breaker open — returning callback failure")
+            return {"success": False, "error": "V2 backend unavailable"}
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(
@@ -76,12 +101,17 @@ class V2Client:
                     },
                 )
                 resp.raise_for_status()
+                self._circuit.record_success()
                 return resp.json()
         except Exception as e:
-            logger.error(f"create_callback failed: {e}")
+            self._circuit.record_failure()
+            logger.error("create_callback failed: %s", e)
             return {"success": False, "error": str(e)}
 
     async def send_sales_lead_alert(self, phone: str, reason: str = "") -> dict:
+        if not self._circuit.should_try():
+            logger.warning("V2 circuit breaker open — returning alert failure")
+            return {"success": False, "error": "V2 backend unavailable"}
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(
@@ -92,7 +122,9 @@ class V2Client:
                     },
                 )
                 resp.raise_for_status()
+                self._circuit.record_success()
                 return resp.json()
         except Exception as e:
-            logger.error(f"send_sales_lead_alert failed: {e}")
+            self._circuit.record_failure()
+            logger.error("send_sales_lead_alert failed: %s", e)
             return {"success": False, "error": str(e)}

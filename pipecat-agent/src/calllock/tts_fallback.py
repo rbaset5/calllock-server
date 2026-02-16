@@ -8,8 +8,6 @@ stream directly to minimise latency.
 
 import asyncio
 import logging
-import time
-from dataclasses import dataclass, field
 from typing import AsyncGenerator, Optional
 
 from pipecat.frames.frames import (
@@ -25,41 +23,9 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.services.tts_service import TTSService
 
+from calllock.circuit_breaker import CircuitBreaker
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class CircuitBreaker:
-    """Simple circuit breaker: closed → open (after N failures) → half-open (after cooldown)."""
-
-    failure_threshold: int = 3
-    cooldown_seconds: float = 60.0
-
-    _consecutive_failures: int = field(default=0, init=False, repr=False)
-    _opened_at: Optional[float] = field(default=None, init=False, repr=False)
-
-    def should_try_primary(self) -> bool:
-        if self._consecutive_failures < self.failure_threshold:
-            return True  # closed
-        # open — check if cooldown elapsed (half-open)
-        if self._opened_at and (time.monotonic() - self._opened_at) >= self.cooldown_seconds:
-            return True  # half-open probe
-        return False
-
-    def record_success(self) -> None:
-        self._consecutive_failures = 0
-        self._opened_at = None
-
-    def record_failure(self) -> None:
-        self._consecutive_failures += 1
-        if self._consecutive_failures >= self.failure_threshold and self._opened_at is None:
-            self._opened_at = time.monotonic()
-            logger.warning(
-                "Circuit breaker OPENED after %d consecutive TTS failures — "
-                "skipping primary for %.0fs",
-                self._consecutive_failures,
-                self.cooldown_seconds,
-            )
 
 
 class FallbackTTSService(TTSService):
@@ -94,6 +60,7 @@ class FallbackTTSService(TTSService):
         self._circuit = CircuitBreaker(
             failure_threshold=failure_threshold,
             cooldown_seconds=cooldown_seconds,
+            label="TTS",
         )
         self._fallback_started = False
         self._start_frame: Optional[StartFrame] = None
@@ -137,7 +104,7 @@ class FallbackTTSService(TTSService):
         return self._primary.can_generate_metrics()
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
-        if self._circuit.should_try_primary():
+        if self._circuit.should_try():
             async for frame in self._try_primary(text, context_id):
                 yield frame
         else:

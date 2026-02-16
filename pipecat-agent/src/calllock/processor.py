@@ -7,6 +7,7 @@ from pipecat.frames.frames import (
     LLMMessagesFrame,
     EndFrame,
     TextFrame,
+    TTSSpeakFrame,
 )
 
 from calllock.session import CallSession
@@ -91,6 +92,13 @@ class StateMachineProcessor(FrameProcessor):
         # Run extraction to populate session fields from conversation
         if self.session.state.value in ("service_area", "discovery", "confirm"):
             await self._run_extraction()
+
+        # If action has a canned speak message, use it instead of LLM
+        if action.speak:
+            await self.push_frame(TTSSpeakFrame(text=action.speak), FrameDirection.DOWNSTREAM)
+            if action.end_call:
+                await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+            return
 
         # End the call if needed
         if action.end_call:

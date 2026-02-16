@@ -111,16 +111,23 @@ def build_call_payload(session: CallSession, end_time: float, user_email: str) -
 
 async def handle_call_ended(session: CallSession):
     """Post-call orchestrator. Called after the pipeline finishes."""
-    webhook_url = os.getenv("DASHBOARD_WEBHOOK_URL", "")
+    jobs_url = os.getenv("DASHBOARD_JOBS_URL", "")
+    calls_url = os.getenv("DASHBOARD_CALLS_URL", "")
+    alerts_url = os.getenv("DASHBOARD_ALERTS_URL", "")
     webhook_secret = os.getenv("DASHBOARD_WEBHOOK_SECRET", "")
     user_email = os.getenv("DASHBOARD_USER_EMAIL", "")
 
-    if not webhook_url or not webhook_secret:
+    if not jobs_url or not webhook_secret:
         logger.warning("Dashboard webhook not configured, skipping post-call sync")
         return
 
     end_time = time.time()
-    dashboard = DashboardClient(webhook_url=webhook_url, webhook_secret=webhook_secret)
+    dashboard = DashboardClient(
+        jobs_url=jobs_url,
+        calls_url=calls_url,
+        alerts_url=alerts_url,
+        webhook_secret=webhook_secret,
+    )
 
     # 1. Send job/lead
     job_payload = build_job_payload(session, end_time, user_email)

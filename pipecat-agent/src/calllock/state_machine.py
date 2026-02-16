@@ -1,4 +1,7 @@
+import logging
+import re
 from dataclasses import dataclass, field
+
 from calllock.session import CallSession
 from calllock.states import State
 from calllock.validation import (
@@ -9,7 +12,12 @@ from calllock.validation import (
     detect_safety_emergency,
     detect_high_ticket,
 )
-import re
+
+logger = logging.getLogger(__name__)
+
+# Turn limits to prevent infinite loops
+MAX_TURNS_PER_STATE = 5
+MAX_TURNS_PER_CALL = 30
 
 
 @dataclass
@@ -85,6 +93,35 @@ class StateMachine:
         """Process a user turn. Returns an Action for the pipeline."""
         session.turn_count += 1
         session.state_turn_count += 1
+
+        # Turn limit checks — escalate to callback if exceeded
+        if session.turn_count > MAX_TURNS_PER_CALL:
+            logger.warning(
+                "Per-call turn limit (%d) exceeded — escalating to callback",
+                MAX_TURNS_PER_CALL,
+            )
+            session.state = State.CALLBACK
+            session.state_turn_count = 0
+            return Action(
+                speak="I apologize, but let me have someone from the team call you back to help you out.",
+                call_tool="create_callback",
+                end_call=True,
+                needs_llm=False,
+            )
+
+        if session.state_turn_count > MAX_TURNS_PER_STATE:
+            logger.warning(
+                "Per-state turn limit (%d) exceeded in %s — escalating to callback",
+                MAX_TURNS_PER_STATE,
+                session.state.value,
+            )
+            session.state = State.CALLBACK
+            session.state_turn_count = 0
+            return Action(
+                speak="Let me have someone from the team call you back.",
+                call_tool="create_callback",
+                needs_llm=False,
+            )
 
         handler = getattr(self, f"_handle_{session.state.value}", None)
         if handler:
