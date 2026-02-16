@@ -40,6 +40,18 @@ class TestPersonaBrevity:
         assert "phone" in lower or "call" in lower
 
 
+class TestConfirmPromptGuardrails:
+    def test_confirm_prompt_prohibits_fabricated_dates(self):
+        """CONFIRM state prompt must explicitly ban stating specific dates/times."""
+        prompt = STATE_PROMPTS[State.CONFIRM]
+        assert "NEVER" in prompt and ("date" in prompt.lower() or "time" in prompt.lower() or "availability" in prompt.lower())
+
+    def test_confirm_prompt_has_availability_fallback(self):
+        """CONFIRM prompt should redirect availability questions."""
+        prompt = STATE_PROMPTS[State.CONFIRM]
+        assert "confirm timing" in prompt.lower() or "when they" in prompt.lower()
+
+
 class TestStatePromptBrevity:
     def test_no_state_prompt_exceeds_400_chars(self):
         """State prompts should be concise for voice context."""

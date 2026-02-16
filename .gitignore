@@ -33,3 +33,4 @@ temp/
 
 # Symlinked projects (separate git repos)
 calllock-dashboard
+.vercel

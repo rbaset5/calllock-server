@@ -14,8 +14,9 @@ class V2Client:
     so the state machine can route to callback instead of hanging.
     """
 
-    def __init__(self, base_url: str, timeout: float = 10.0):
+    def __init__(self, base_url: str, api_key: str = "", timeout: float = 10.0):
         self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
         self.timeout = timeout
         self._circuit = CircuitBreaker(
             failure_threshold=3,
@@ -23,12 +24,19 @@ class V2Client:
             label="V2 backend",
         )
 
+    def _headers(self) -> dict:
+        """Build auth headers for V2 backend requests."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        return headers
+
     async def lookup_caller(self, phone: str, call_id: str) -> dict:
         if not self._circuit.should_try():
             logger.warning("V2 circuit breaker open — returning unknown caller")
             return {"found": False, "message": "V2 backend unavailable — proceeding without history."}
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, headers=self._headers()) as client:
                 resp = await client.post(
                     f"{self.base_url}/webhook/retell/lookup_caller",
                     json={
@@ -60,9 +68,9 @@ class V2Client:
             logger.warning("V2 circuit breaker open — returning booking failure")
             return {"booked": False, "error": "V2 backend unavailable"}
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, headers=self._headers()) as client:
                 resp = await client.post(
-                    f"{self.base_url}/api/retell/book-service",
+                    f"{self.base_url}/webhook/retell/book_appointment",
                     json={
                         "customer_name": customer_name,
                         "customer_phone": phone,
@@ -89,7 +97,7 @@ class V2Client:
             logger.warning("V2 circuit breaker open — returning callback failure")
             return {"success": False, "error": "V2 backend unavailable"}
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, headers=self._headers()) as client:
                 resp = await client.post(
                     f"{self.base_url}/webhook/retell/create_callback",
                     json={
@@ -113,7 +121,7 @@ class V2Client:
             logger.warning("V2 circuit breaker open — returning alert failure")
             return {"success": False, "error": "V2 backend unavailable"}
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, headers=self._headers()) as client:
                 resp = await client.post(
                     f"{self.base_url}/webhook/retell/send_sales_lead_alert",
                     json={

@@ -257,6 +257,23 @@ class TestCallbackState:
         assert action.end_call is True
 
 
+class TestCallbackToolResult:
+    def test_callback_created_true_on_success(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"success": True})
+        assert session.callback_created is True
+
+    def test_callback_created_false_on_failure(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"success": False, "error": "401 Unauthorized"})
+        assert session.callback_created is False
+
+    def test_callback_created_false_on_error_key(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"error": "V2 backend unavailable"})
+        assert session.callback_created is False
+
+
 # --- Structural guarantees ---
 
 class TestStructuralGuarantees:

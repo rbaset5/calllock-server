@@ -61,6 +61,8 @@ Paraphrase their problem briefly. No diagnostic questions — the tech handles t
 
     State.CONFIRM: """Read back: "[name], [problem], at [address]. When works best?"
 After timing: "Got it. Want me to book that?"
+NEVER state specific dates, times, or availability. You have NO calendar access.
+If asked about availability: "The team will confirm timing when they reach out."
 If they want callback or new system, route to callback.""",
 
     State.BOOKING: """Say: "Checking the schedule now..."

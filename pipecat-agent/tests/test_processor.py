@@ -7,7 +7,7 @@ from calllock.state_machine import StateMachine
 from calllock.states import State
 
 from pipecat.processors.frame_processor import FrameDirection
-from pipecat.frames.frames import TranscriptionFrame
+from pipecat.frames.frames import TranscriptionFrame, EndFrame
 
 
 @pytest.fixture
@@ -146,3 +146,37 @@ class TestNonBlockingExtraction:
 
         # Pipeline still works
         assert processor.push_frame.called
+
+
+class TestDebounceWindow:
+    def test_debounce_window_exceeds_vad_stop(self, processor):
+        """Debounce window (400ms) must exceed VAD stop_secs (300ms) to prevent split utterances."""
+        assert processor._debounce_seconds >= 0.4
+
+
+class TestEndCallAfterLLM:
+    @pytest.mark.asyncio
+    async def test_end_call_with_llm_schedules_endframe(self, processor):
+        """When end_call=True and needs_llm=True, EndFrame should be scheduled after delay."""
+        processor._debounce_seconds = 0.05
+
+        # Put session in DONE state — triggers end_call=True, needs_llm=True
+        processor.session.state = State.DONE
+
+        frame = TranscriptionFrame(text="Thanks bye", user_id="", timestamp="")
+        await processor.process_frame(frame, FrameDirection.DOWNSTREAM)
+
+        # Wait for debounce + delayed EndFrame (3s default, but we'll check the task exists)
+        await asyncio.sleep(0.1)  # Let debounce fire
+
+        # Transcription frame should be pushed downstream for LLM
+        pushed_frames = [call.args[0] for call in processor.push_frame.call_args_list]
+        frame_types = [type(f).__name__ for f in pushed_frames]
+        assert "TranscriptionFrame" in frame_types, f"TranscriptionFrame not pushed: {frame_types}"
+
+        # Wait for delayed EndFrame
+        await asyncio.sleep(3.5)
+
+        pushed_frames = [call.args[0] for call in processor.push_frame.call_args_list]
+        frame_types = [type(f).__name__ for f in pushed_frames]
+        assert "EndFrame" in frame_types, f"EndFrame not found in pushed frames: {frame_types}"

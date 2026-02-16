@@ -18,7 +18,7 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService, OpenAILLMContext
 from pipecat.services.inworld.tts import InworldHttpTTSService
 from pipecat.services.deepgram.tts import DeepgramHttpTTSService
-from pipecat.frames.frames import LLMMessagesFrame, TTSSpeakFrame
+from pipecat.frames.frames import EndFrame, LLMMessagesFrame, TTSSpeakFrame
 from pipecat.runner.utils import parse_telephony_websocket
 
 from calllock.session import CallSession
@@ -38,9 +38,13 @@ async def create_pipeline(websocket: WebSocket):
 
     # Parse Twilio WebSocket handshake
     transport_type, call_data = await parse_telephony_websocket(websocket)
+    logger.info(f"Twilio handshake: transport={transport_type}, keys={list(call_data.keys())}")
+    logger.debug(f"Twilio call_data: {call_data}")
     stream_sid = call_data["stream_id"]
     call_sid = call_data["call_id"]
     caller_phone = call_data.get("body", {}).get("From", "")
+    if not caller_phone:
+        logger.warning(f"No caller phone extracted. call_data body keys: {list(call_data.get('body', {}).keys())}")
 
     logger.info(f"Call started: {call_sid} from {caller_phone}")
 
@@ -49,7 +53,10 @@ async def create_pipeline(websocket: WebSocket):
     session.call_sid = call_sid
     session.start_time = time.time()
     machine = StateMachine()
-    tools = V2Client(base_url=os.getenv("V2_BACKEND_URL", ""))
+    tools = V2Client(
+        base_url=os.getenv("V2_BACKEND_URL", ""),
+        api_key=os.getenv("V2_API_KEY", ""),
+    )
 
     # Twilio transport
     serializer = TwilioFrameSerializer(
@@ -157,6 +164,11 @@ async def create_pipeline(websocket: WebSocket):
     async def on_connected(transport, client):
         # Speak the greeting directly — no LLM round-trip
         await task.queue_frames([TTSSpeakFrame(greeting)])
+
+    @transport.event_handler("on_client_disconnected")
+    async def on_disconnected(transport, client):
+        logger.info(f"Client disconnected, ending pipeline for {call_sid}")
+        await task.queue_frames([EndFrame()])
 
     runner = PipelineRunner()
     await runner.run(task)

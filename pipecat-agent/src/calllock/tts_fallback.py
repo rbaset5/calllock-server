@@ -79,6 +79,7 @@ class FallbackTTSService(TTSService):
         self._setup = setup
 
     async def start(self, frame: StartFrame):
+        logger.info("FallbackTTSService received StartFrame — forwarding to primary")
         await super().start(frame)
         self._start_frame = frame
         await self._primary.start(frame)

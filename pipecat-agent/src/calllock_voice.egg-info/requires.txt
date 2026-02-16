@@ -1,8 +1,9 @@
-pipecat-ai[deepgram,elevenlabs,openai,silero]>=0.0.60
+pipecat-ai[cartesia,deepgram,elevenlabs,inworld,openai,silero]>=0.0.60
 fastapi>=0.115.0
 uvicorn>=0.32.0
 httpx>=0.27.0
 python-dotenv>=1.0.0
+aiohttp>=3.9.0
 
 [dev]
 pytest>=8.0

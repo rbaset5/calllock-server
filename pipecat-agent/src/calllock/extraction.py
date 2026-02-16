@@ -6,9 +6,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 EXTRACTION_PROMPT = """Extract structured data from this conversation. Return ONLY valid JSON.
-Fields to extract: customer_name, problem_description, service_address, zip_code, preferred_time.
+
+Fields:
+- customer_name: The caller's name only. Do NOT include addresses, numbers, or locations.
+- problem_description: What service issue the caller described.
+- service_address: Street address only. Do NOT include the customer name. Format: "123 Street Name".
+- zip_code: 5-digit ZIP code.
+- preferred_time: When the caller wants service.
+
 If a field is not mentioned, use empty string "".
-Do not guess or fabricate values. Only extract what the caller explicitly said."""
+Do not guess or fabricate values. Only extract what the caller explicitly said.
+NEVER mix customer_name into service_address or vice versa."""
 
 
 async def extract_fields(conversation: list[dict]) -> dict:

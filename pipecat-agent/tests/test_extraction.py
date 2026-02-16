@@ -2,7 +2,7 @@ import pytest
 import httpx
 import respx
 import json
-from calllock.extraction import extract_fields
+from calllock.extraction import extract_fields, EXTRACTION_PROMPT
 
 
 @respx.mock
@@ -36,3 +36,16 @@ async def test_extraction_handles_api_failure(monkeypatch):
     )
     result = await extract_fields([{"role": "user", "content": "test"}])
     assert result == {}
+
+
+class TestExtractionPrompt:
+    def test_extraction_prompt_separates_name_and_address(self):
+        """Extraction prompt must explicitly instruct separation of name and address."""
+        assert "name" in EXTRACTION_PROMPT.lower()
+        assert "address" in EXTRACTION_PROMPT.lower()
+        assert "do not" in EXTRACTION_PROMPT.lower() or "never" in EXTRACTION_PROMPT.lower()
+
+    def test_extraction_prompt_has_field_mixing_guard(self):
+        """Extraction prompt must explicitly warn against mixing name and address fields."""
+        lower = EXTRACTION_PROMPT.lower()
+        assert "never mix" in lower or "do not include" in lower

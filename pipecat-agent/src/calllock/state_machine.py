@@ -262,7 +262,10 @@ class StateMachine:
         session.state_turn_count = 0
 
     def _tool_result_create_callback(self, session: CallSession, result: dict):
-        session.callback_created = True
+        if result.get("error"):
+            session.callback_created = False
+        else:
+            session.callback_created = True
 
     def _tool_result_send_sales_lead_alert(self, session: CallSession, result: dict):
         # Alert sent — state already set to CALLBACK

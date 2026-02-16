@@ -49,7 +49,7 @@ class StateMachineProcessor(FrameProcessor):
         self.machine = machine
         self.tools = tools
         self.context = context
-        self._debounce_seconds = 0.2  # 200ms
+        self._debounce_seconds = 0.4  # Must exceed VAD stop_secs (0.3) to prevent split utterances
         self._debounce_task: asyncio.Task | None = None
         self._debounce_buffer: list[str] = []
 
@@ -120,10 +120,9 @@ class StateMachineProcessor(FrameProcessor):
         # End the call if needed
         if action.end_call:
             if action.needs_llm:
-                # Let LLM generate a farewell, then end
+                # Let LLM generate a farewell, then end after TTS finishes
                 await self.push_frame(frame, FrameDirection.DOWNSTREAM)
-                # EndFrame will be pushed after TTS completes
-                # We schedule it to fire after a brief delay
+                asyncio.create_task(self._delayed_end_call(delay=3.0))
             else:
                 await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
             return
@@ -131,6 +130,11 @@ class StateMachineProcessor(FrameProcessor):
         # Pass transcription downstream if LLM should generate response
         if action.needs_llm:
             await self.push_frame(frame, FrameDirection.DOWNSTREAM)
+
+    async def _delayed_end_call(self, delay: float = 3.0):
+        """Push EndFrame after a delay to allow TTS to finish speaking."""
+        await asyncio.sleep(delay)
+        await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
 
     async def _execute_tool(self, action: Action):
         tool = action.call_tool
