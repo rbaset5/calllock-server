@@ -13,7 +13,7 @@ from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService, OpenAILLMContext
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.frames.frames import LLMMessagesFrame
 from pipecat.runner.utils import parse_telephony_websocket
 
@@ -69,10 +69,9 @@ async def create_pipeline(websocket: WebSocket):
         model="gpt-4o",
     )
 
-    tts = ElevenLabsTTSService(
-        api_key=os.getenv("ELEVENLABS_API_KEY"),
-        voice_id=os.getenv("ELEVENLABS_VOICE_ID"),
-        sample_rate=16000,
+    tts = CartesiaTTSService(
+        api_key=os.getenv("CARTESIA_API_KEY"),
+        voice_id=os.getenv("CARTESIA_VOICE_ID", "a5136bf9-224c-4d76-b823-52bd5efcffcc"),
     )
 
     # LLM context with initial system prompt
