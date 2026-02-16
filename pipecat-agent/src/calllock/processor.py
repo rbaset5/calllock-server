@@ -1,4 +1,5 @@
 import logging
+import time as _time
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.frames.frames import (
     Frame,
@@ -53,6 +54,13 @@ class StateMachineProcessor(FrameProcessor):
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
             await self._handle_transcription(frame)
         else:
+            # Log agent responses flowing through
+            if isinstance(frame, TextFrame) and frame.text.strip():
+                self.session.transcript_log.append({
+                    "role": "agent",
+                    "content": frame.text,
+                    "timestamp": _time.time(),
+                })
             # Pass through all other frames
             await self.push_frame(frame, direction)
 
@@ -62,6 +70,13 @@ class StateMachineProcessor(FrameProcessor):
 
         # Add to conversation history
         self.session.conversation_history.append({"role": "user", "content": text})
+
+        # Add to transcript log for post-call processing
+        self.session.transcript_log.append({
+            "role": "user",
+            "content": text,
+            "timestamp": _time.time(),
+        })
 
         # Run state machine
         action = self.machine.process(self.session, text)
@@ -123,6 +138,14 @@ class StateMachineProcessor(FrameProcessor):
 
         logger.info(f"Tool result ({tool}): {result}")
         self.machine.handle_tool_result(self.session, tool, result)
+
+        # Log tool invocation to transcript
+        self.session.transcript_log.append({
+            "role": "tool",
+            "name": tool,
+            "result": result,
+            "timestamp": _time.time(),
+        })
 
     async def _run_extraction(self):
         """Extract structured fields from conversation using LLM."""
