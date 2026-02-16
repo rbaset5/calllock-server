@@ -39,6 +39,8 @@ class DashboardClient:
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     resp = await client.post(url, json=payload, headers=self._headers())
+                    if resp.status_code >= 400:
+                        logger.error("%s returned %d: %s", label, resp.status_code, resp.text)
                     resp.raise_for_status()
                     return resp.json()
             except Exception as e:

@@ -86,3 +86,38 @@ class TestSendEmergencyAlert:
         )
         result = await dashboard.send_emergency_alert({"phone_number": "+15125551234"})
         assert result["success"] is False
+
+
+class TestResponseBodyLogging:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_400_response_body_is_logged(self, dashboard, caplog):
+        """When dashboard returns 400, the response body should be logged."""
+        error_body = '{"error":"Validation failed","details":[{"path":"urgency","message":"Invalid enum value"}]}'
+        respx.post("https://app.example.com/api/webhook/jobs").mock(
+            return_value=httpx.Response(400, text=error_body)
+        )
+
+        import logging
+        with caplog.at_level(logging.ERROR):
+            result = await dashboard.send_job({"test": "payload"})
+
+        assert "error" in result
+        # The response body with Zod details should appear in logs
+        assert "Validation failed" in caplog.text
+        assert "urgency" in caplog.text
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_200_response_not_error_logged(self, dashboard, caplog):
+        """Successful responses should not trigger error logging."""
+        respx.post("https://app.example.com/api/webhook/jobs").mock(
+            return_value=httpx.Response(200, json={"success": True})
+        )
+
+        import logging
+        with caplog.at_level(logging.ERROR):
+            result = await dashboard.send_job({"test": "payload"})
+
+        assert result == {"success": True}
+        assert "returned" not in caplog.text
