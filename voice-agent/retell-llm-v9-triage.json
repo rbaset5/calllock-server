@@ -59,7 +59,7 @@
           "description": "End the call ONLY for wrong number or obvious spam/robocall. Not for any other reason."
         }
       ],
-      "interruption_sensitivity": 0.5
+      "interruption_sensitivity": 0.4
     },
     {
       "name": "non_service",
@@ -135,7 +135,7 @@
           "description": "End the call after handling the non-service request (vendor decline, job redirect, or after callback is created)."
         }
       ],
-      "interruption_sensitivity": 0.8
+      "interruption_sensitivity": 0.6
     },
     {
       "name": "lookup",
@@ -250,7 +250,7 @@
           }
         }
       ],
-      "interruption_sensitivity": 0.6
+      "interruption_sensitivity": 0.5
     },
     {
       "name": "follow_up",
@@ -313,7 +313,7 @@
           "description": "End the call after resolving the follow-up (callback created, caller satisfied, or caller declines further help)."
         }
       ],
-      "interruption_sensitivity": 0.8
+      "interruption_sensitivity": 0.6
     },
     {
       "name": "manage_booking",
@@ -377,7 +377,7 @@
           "description": "End the call after confirming cancellation or when the caller has no further needs."
         }
       ],
-      "interruption_sensitivity": 0.8
+      "interruption_sensitivity": 0.6
     },
     {
       "name": "safety",
@@ -483,7 +483,7 @@
           "description": "End the call ONLY if the caller's ZIP code is outside the 787 service area. NEVER end the call because the caller has an existing appointment — that is NOT a valid reason to end. Not for any other reason."
         }
       ],
-      "interruption_sensitivity": 0.8
+      "interruption_sensitivity": 0.6
     },
     {
       "name": "discovery",
@@ -526,7 +526,7 @@
               },
               "service_address": {
                 "type": "string",
-                "description": "Street address for the service call, or 'TBD' if not collected"
+                "description": "Street address for the service call"
               },
               "equipment_type": {
                 "type": "string",
@@ -546,7 +546,7 @@
         }
       ],
       "tools": [],
-      "interruption_sensitivity": 0.8
+      "interruption_sensitivity": 0.6
     },
     {
       "name": "urgency",
@@ -613,7 +613,7 @@
         }
       ],
       "tools": [],
-      "interruption_sensitivity": 0.8
+      "interruption_sensitivity": 0.6
     },
     {
       "name": "urgency_callback",
@@ -722,7 +722,7 @@
     },
     {
       "name": "pre_confirm",
-      "state_prompt": "## State: PRE_CONFIRM\n\nRead back the collected info and get the caller's explicit approval before booking.\n\n## Step 0: VERIFY YOU HAVE REAL DATA (BLOCKING)\nBEFORE reading back anything, check EVERY field. A field is NOT real if it is:\n- Empty, null, or missing\n- A template variable (contains {{ or }})\n- A placeholder like \"TBD\", \"unknown\", \"N/A\", or \"auto\"\n- A phone number used as a name (starts with + or is all digits)\n- Anything that is NOT a real human name, real address, or real problem description\n\nCHECK EACH ONE:\n1. customer_name: Do you have a real person's name (e.g., \"John Smith\", \"Maria\")? If NOT → you MUST ask: \"Before I confirm everything — what name should I put on the work order?\" WAIT for their answer. Do NOT proceed until you have a real name.\n2. problem_description: Do you have a real HVAC issue description? If NOT → ask: \"And what's going on with the system?\"\n3. service_address: Do you have a real street address? If NOT → ask: \"What's the service address?\"\n\nCRITICAL: If you would say the words \"customer_name\" or \"{{\" out loud, the field is NOT filled. Stop and ask.\nDo NOT read back ANY summary until ALL three fields contain real values.\n\n## Step 1: Summarize What You Have\n\nSay: \"Alright, let me make sure I have everything right. [Name], you've got a [problem] at [address], and you're looking for [timing]. Sound right?\"\n\nReplace [Name] with the actual name the caller gave you. Replace [problem], [address], [timing] with real collected values.\n\nKeep it natural and brief — one sentence.\n\n## Step 2: Wait for Their Response\n\n### If YES / CONFIRMED\n\"yes\", \"that's right\", \"correct\", \"yep\", \"sounds good\", \"go ahead\"\n→ \"Perfect — let me check what we've got open.\"\n→ [booking]\n\nCRITICAL ROUTING RULE: After the caller confirms, your ONLY next action is → [booking]. Do NOT call transition_to_discovery, transition_to_urgency, transition_to_service_area, or any other backward edge. ALL data has been collected and confirmed — proceed directly to booking. If any data seems incomplete, book anyway and note it in the issue_description.\n\n### If CORRECTION NEEDED\nCaller corrects a detail (name spelling, address, timing, problem)\n→ Acknowledge: \"Got it — so that's [corrected detail].\"\n→ Update the variable\n→ Ask: \"Everything else look good?\"\n→ Once they confirm → [booking]\n\n### If DECLINED\n\"actually no\", \"never mind\", \"I changed my mind\", \"not right now\"\n→ \"No problem. Want me to have someone call you back instead?\"\n→ If yes: \"Perfect — they'll reach out as soon as possible.\"\n→ If no: \"Okay — feel free to call back anytime.\"\n→ end_call\n\n## Rules\n- NEVER proceed to booking without explicit approval from the caller\n- Do NOT call book_service in this state — that happens in the next state\n- If they correct something, re-confirm just that detail, not the whole summary\n- One correction loop max — if they keep changing things, re-read the full summary once more\n- Keep it conversational, not robotic",
+      "state_prompt": "## State: PRE_CONFIRM\n\nRead back the collected info and get the caller's explicit approval before booking.\n\n## Step 0: VERIFY YOU HAVE REAL DATA (BLOCKING)\nBEFORE reading back anything, check EVERY field. A field is NOT real if it is:\n- Empty, null, or missing\n- A template variable (contains {{ or }})\n- A placeholder like \"TBD\", \"unknown\", \"N/A\", or \"auto\"\n- A phone number used as a name (starts with + or is all digits)\n- Anything that is NOT a real human name, real address, or real problem description\n\nCHECK EACH ONE:\n1. customer_name: Do you have a real person's name (e.g., \"John Smith\", \"Maria\")? If NOT → you MUST ask: \"Before I confirm everything — what name should I put on the work order?\" WAIT for their answer. Do NOT proceed until you have a real name.\n2. problem_description: Do you have a real HVAC issue description? If NOT → ask: \"And what's going on with the system?\"\n3. service_address: Do you have a real street address? If NOT → ask: \"What's the service address?\"\n\nCRITICAL: If you would say the words \"customer_name\" or \"{{\" out loud, the field is NOT filled. Stop and ask.\nDo NOT read back ANY summary until ALL three fields contain real values.\n\n## Step 1: Summarize What You Have\n\nSay: \"Alright, let me make sure I have everything right. [Name], you've got a [problem] at [address], and you're looking for [timing]. Sound right?\"\n\nReplace [Name] with the actual name the caller gave you. Replace [problem], [address], [timing] with real collected values.\n\nKeep it natural and brief — one sentence.\n\n## Step 2: Wait for Their Response\n\n### If YES / CONFIRMED\n\"yes\", \"that's right\", \"correct\", \"yep\", \"sounds good\", \"go ahead\"\n→ \"Perfect — let me check what we've got open.\"\n→ [booking]\n\nCRITICAL ROUTING RULE: After the caller confirms, your ONLY next action is → [booking]. Do NOT call any backward edge to previous states. ALL data has been collected and confirmed — proceed directly to booking. If any data seems incomplete, book anyway and note it in the issue_description.\n\n### If CORRECTION NEEDED\nCaller corrects a detail (name spelling, address, timing, problem)\n→ Acknowledge: \"Got it — so that's [corrected detail].\"\n→ Update the variable\n→ Ask: \"Everything else look good?\"\n→ Once they confirm → [booking]\n\n### If DECLINED\n\"actually no\", \"never mind\", \"I changed my mind\", \"not right now\"\n→ \"No problem. Want me to have someone call you back instead?\"\n→ If yes: \"Perfect — they'll reach out as soon as possible.\"\n→ If no: \"Okay — feel free to call back anytime.\"\n→ end_call\n\n## Rules\n- NEVER proceed to booking without explicit approval from the caller\n- Do NOT call book_service in this state — that happens in the next state\n- If they correct something, re-confirm just that detail, not the whole summary\n- One correction loop max — if they keep changing things, re-read the full summary once more\n- Keep it conversational, not robotic",
       "edges": [
         {
           "description": "Caller confirms information is correct and approves booking. Proceed immediately — the booking state will call book_service.",
@@ -743,7 +743,7 @@
         }
       ],
       "tools": [],
-      "interruption_sensitivity": 0.8
+      "interruption_sensitivity": 0.6
     },
     {
       "name": "booking",
@@ -851,7 +851,7 @@
           }
         }
       ],
-      "interruption_sensitivity": 0.7
+      "interruption_sensitivity": 0.6
     },
     {
       "name": "booking_failed",
@@ -909,7 +909,7 @@
           "description": "End the call ONLY AFTER calling create_callback_request. Never end the call without creating the callback first."
         }
       ],
-      "interruption_sensitivity": 0.8
+      "interruption_sensitivity": 0.6
     },
     {
       "name": "confirm",
@@ -922,7 +922,7 @@
           "description": "End the call after wrapping up a successful booking or appointment management."
         }
       ],
-      "interruption_sensitivity": 0.7
+      "interruption_sensitivity": 0.6
     }
   ],
   "starting_state": "welcome",
