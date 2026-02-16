@@ -44,6 +44,32 @@ async def twiml_test(request: Request):
     return Response(content=xml, media_type="application/xml")
 
 
+@app.api_route("/twiml-raw", methods=["GET", "POST"])
+async def twiml_raw(request: Request):
+    """TwiML that routes to the raw WebSocket test (no Pipecat)."""
+    xml = (
+        '<Response>'
+        '<Connect>'
+        f'<Stream url="wss://{HOST}.fly.dev/ws/twilio-raw" />'
+        '</Connect>'
+        '</Response>'
+    )
+    return Response(content=xml, media_type="application/xml")
+
+
+@app.api_route("/twiml-eleven", methods=["GET", "POST"])
+async def twiml_eleven(request: Request):
+    """TwiML that routes to ElevenLabs direct test (no Pipecat pipeline)."""
+    xml = (
+        '<Response>'
+        '<Connect>'
+        f'<Stream url="wss://{HOST}.fly.dev/ws/twilio-eleven" />'
+        '</Connect>'
+        '</Response>'
+    )
+    return Response(content=xml, media_type="application/xml")
+
+
 @app.websocket("/ws/twilio")
 async def twilio_websocket(websocket: WebSocket):
     await websocket.accept()
@@ -58,7 +84,7 @@ async def twilio_test_websocket(websocket: WebSocket):
 
 
 async def _run_test_pipeline(websocket: WebSocket):
-    """Minimal test pipeline with ONLY websocket send logging (no extra processors)."""
+    """Minimal test pipeline: TTS(16kHz) -> AudioResampleProcessor(8kHz) -> transport."""
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.runner import PipelineRunner
     from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -67,69 +93,22 @@ async def _run_test_pipeline(websocket: WebSocket):
         FastAPIWebsocketParams,
     )
     from pipecat.serializers.twilio import TwilioFrameSerializer
-    from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+    from pipecat.services.cartesia.tts import CartesiaTTSService
     from pipecat.frames.frames import TTSSpeakFrame
     from pipecat.runner.utils import parse_telephony_websocket
     from loguru import logger
 
-    logger.info("=== SEND-LOGGING TEST PIPELINE ===")
+    from calllock.audio_resample import AudioResampleProcessor
 
-    # --- Only diagnostic: wrap websocket sends ---
-    _original_send_text = websocket.send_text
-    _send_count = 0
+    logger.info("=== TEST PIPELINE: Cartesia TTS + AudioResampleProcessor ===")
 
-    async def _logged_send_text(data, **kwargs):
-        nonlocal _send_count
-        _send_count += 1
-        # Analyze mulaw payload for silence detection
-        import json as _json, base64 as _b64
-        try:
-            msg = _json.loads(data)
-            if msg.get("event") == "media":
-                raw = _b64.b64decode(msg["media"]["payload"])
-                silence = sum(1 for b in raw if b == 0xFF)
-                logger.info(
-                    f">>> WS_SEND #{_send_count}: {len(raw)} mulaw bytes, "
-                    f"silence={silence}/{len(raw)} ({100*silence//len(raw)}%), "
-                    f"first_16={raw[:16].hex()}"
-                )
-            else:
-                logger.info(f">>> WS_SEND #{_send_count}: event={msg.get('event')}")
-        except Exception:
-            logger.info(f">>> WS_SEND #{_send_count}: {len(data)} chars (non-JSON)")
-        await _original_send_text(data, **kwargs)
-
-    websocket.send_text = _logged_send_text
-
-    _original_send_bytes = websocket.send_bytes
-
-    async def _logged_send_bytes(data, **kwargs):
-        nonlocal _send_count
-        _send_count += 1
-        logger.info(f">>> WS_SEND_BYTES #{_send_count}: {len(data)} bytes")
-        await _original_send_bytes(data, **kwargs)
-
-    websocket.send_bytes = _logged_send_bytes
-
-    # --- Fix: bypass soxr resampler, use audioop.ratecv instead ---
-    import audioop as _audioop
-    from pipecat.audio.resamplers.soxr_stream_resampler import SOXRStreamAudioResampler
-
-    async def _audioop_resample(self, audio, in_rate, out_rate):
-        if in_rate == out_rate:
-            return audio
-        resampled, _ = _audioop.ratecv(audio, 2, 1, in_rate, out_rate, None)
-        return resampled
-
-    SOXRStreamAudioResampler.resample = _audioop_resample
-    logger.info("### RESAMPLER PATCHED: using audioop.ratecv instead of soxr")
-
-    # --- Standard Pipecat setup (identical to old working code) ---
+    # Parse Twilio handshake
     transport_type, call_data = await parse_telephony_websocket(websocket)
     stream_sid = call_data["stream_id"]
     call_sid = call_data["call_id"]
     logger.info(f"Test call: {call_sid}, stream: {stream_sid}")
 
+    # Transport
     serializer = TwilioFrameSerializer(
         stream_sid=stream_sid,
         call_sid=call_sid,
@@ -146,14 +125,19 @@ async def _run_test_pipeline(websocket: WebSocket):
         ),
     )
 
-    tts = ElevenLabsTTSService(
-        api_key=os.getenv("ELEVENLABS_API_KEY"),
-        voice_id=os.getenv("ELEVENLABS_VOICE_ID"),
+    # Cartesia TTS
+    tts = CartesiaTTSService(
+        api_key=os.getenv("CARTESIA_API_KEY"),
+        voice_id="a5136bf9-224c-4d76-b823-52bd5efcffcc",
     )
+
+    # Resample 16kHz -> 8kHz using audioop (bypasses soxr entirely)
+    resampler = AudioResampleProcessor(target_rate=8000)
 
     pipeline = Pipeline([
         transport.input(),
         tts,
+        resampler,
         transport.output(),
     ])
 
@@ -161,7 +145,7 @@ async def _run_test_pipeline(websocket: WebSocket):
         pipeline,
         params=PipelineParams(
             audio_in_sample_rate=8000,
-            audio_out_sample_rate=16000,
+            audio_out_sample_rate=8000,  # Serializer does 8->8 (no soxr)
         ),
     )
 
@@ -172,7 +156,121 @@ async def _run_test_pipeline(websocket: WebSocket):
 
     runner = PipelineRunner()
     await runner.run(task)
-    logger.info(f"=== TEST PIPELINE ENDED === (ws sends: {_send_count})")
+    logger.info("=== TEST PIPELINE ENDED ===")
+
+
+@app.websocket("/ws/twilio-eleven")
+async def twilio_eleven_websocket(websocket: WebSocket):
+    """ElevenLabs direct test — bypasses Pipecat completely.
+
+    Calls ElevenLabs REST API directly, converts PCM to mulaw, sends to Twilio.
+    If you hear speech, the issue is in Pipecat's pipeline processing.
+    """
+    import asyncio
+    import audioop
+    import base64
+    import json
+    import struct
+    import logging
+    import httpx
+
+    logger = logging.getLogger(__name__)
+    await websocket.accept()
+    logger.info("=== ELEVENLABS DIRECT TEST ===")
+
+    # Read Twilio handshake
+    first_msg = json.loads(await websocket.receive_text())
+    logger.info(f"Eleven test msg 1: event={first_msg.get('event')}")
+    second_msg = json.loads(await websocket.receive_text())
+    logger.info(f"Eleven test msg 2: event={second_msg.get('event')}")
+
+    stream_sid = None
+    for msg in [first_msg, second_msg]:
+        if msg.get("event") == "start":
+            stream_sid = msg["start"]["streamSid"]
+            break
+
+    if not stream_sid:
+        logger.error("No stream SID found!")
+        await websocket.close()
+        return
+
+    logger.info(f"Eleven test stream SID: {stream_sid}")
+
+    try:
+        # Call ElevenLabs REST API directly — no Pipecat
+        api_key = os.getenv("ELEVENLABS_API_KEY")
+        voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_16000"
+
+        logger.info(f"Calling ElevenLabs REST API: voice={voice_id}")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                url,
+                headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+                json={
+                    "text": "Hello! This is a direct ElevenLabs test. Can you hear me clearly?",
+                },
+            )
+
+        if resp.status_code != 200:
+            logger.error(f"ElevenLabs API error: {resp.status_code} {resp.text[:500]}")
+            await websocket.close()
+            return
+
+        pcm_16k = resp.content
+        logger.info(f"Got {len(pcm_16k)} bytes of 16kHz PCM from ElevenLabs")
+
+        # Check PCM amplitude
+        n_samples = len(pcm_16k) // 2
+        if n_samples > 0:
+            samples = struct.unpack(f'<{n_samples}h', pcm_16k)
+            max_amp = max(abs(s) for s in samples)
+            logger.info(f"PCM 16kHz: {n_samples} samples, max_amp={max_amp}")
+        else:
+            logger.error("No PCM samples!")
+            await websocket.close()
+            return
+
+        # Resample 16kHz -> 8kHz using audioop
+        pcm_8k, _ = audioop.ratecv(pcm_16k, 2, 1, 16000, 8000, None)
+        logger.info(f"Resampled to {len(pcm_8k)} bytes of 8kHz PCM")
+
+        # Convert to mulaw
+        mulaw_bytes = audioop.lin2ulaw(pcm_8k, 2)
+
+        # Verify mulaw is not silence
+        silence = sum(1 for b in mulaw_bytes if b == 0xFF)
+        logger.info(
+            f"Mulaw: {len(mulaw_bytes)} bytes, silence={silence}/{len(mulaw_bytes)} "
+            f"({100*silence//max(len(mulaw_bytes),1)}%)"
+        )
+
+        # Send in 160-byte chunks with real-time pacing (20ms per chunk)
+        chunk_size = 160
+        chunks_sent = 0
+        for i in range(0, len(mulaw_bytes), chunk_size):
+            chunk = mulaw_bytes[i : i + chunk_size]
+            payload = base64.b64encode(chunk).decode("utf-8")
+            message = json.dumps({
+                "event": "media",
+                "streamSid": stream_sid,
+                "media": {"payload": payload},
+            })
+            await websocket.send_text(message)
+            chunks_sent += 1
+            await asyncio.sleep(0.02)
+
+        logger.info(f"Eleven test: sent {chunks_sent} chunks")
+
+        # Keep connection open so Twilio plays the audio
+        await asyncio.sleep(3)
+        logger.info("=== ELEVENLABS DIRECT TEST COMPLETE ===")
+
+    except Exception as e:
+        logger.error(f"ELEVEN TEST ERROR: {type(e).__name__}: {e}")
+
+    await websocket.close()
 
 
 @app.websocket("/ws/twilio-raw")

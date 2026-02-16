@@ -22,6 +22,7 @@ from calllock.state_machine import StateMachine
 from calllock.prompts import get_system_prompt
 from calllock.tools import V2Client
 from calllock.processor import StateMachineProcessor
+from calllock.audio_resample import AudioResampleProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ async def create_pipeline(websocket: WebSocket):
     tts = ElevenLabsTTSService(
         api_key=os.getenv("ELEVENLABS_API_KEY"),
         voice_id=os.getenv("ELEVENLABS_VOICE_ID"),
+        sample_rate=16000,
     )
 
     # LLM context with initial system prompt
@@ -86,7 +88,10 @@ async def create_pipeline(websocket: WebSocket):
         context=context,
     )
 
-    # Build pipeline: STT -> StateMachine -> ContextAgg -> LLM -> TTS
+    # Resample 16kHz TTS -> 8kHz for Twilio (bypasses soxr entirely)
+    resampler = AudioResampleProcessor(target_rate=8000)
+
+    # Build pipeline: STT -> StateMachine -> ContextAgg -> LLM -> TTS -> Resample
     pipeline = Pipeline([
         transport.input(),
         stt,
@@ -94,6 +99,7 @@ async def create_pipeline(websocket: WebSocket):
         context_aggregator.user(),
         llm,
         tts,
+        resampler,
         transport.output(),
         context_aggregator.assistant(),
     ])
@@ -102,7 +108,7 @@ async def create_pipeline(websocket: WebSocket):
         pipeline,
         params=PipelineParams(
             audio_in_sample_rate=8000,
-            audio_out_sample_rate=16000,
+            audio_out_sample_rate=8000,
         ),
     )
 
