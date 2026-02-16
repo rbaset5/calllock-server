@@ -239,6 +239,30 @@ class TestTranscriptFiltering:
         assert "[Tool:" in payload["call_transcript"]
 
 
+class TestEmptyPhoneFallback:
+    def test_job_payload_uses_unknown_when_phone_empty(self):
+        s = CallSession(phone_number="")
+        s.call_sid = "CA_no_phone"
+        s.start_time = 1000.0
+        s.state = State.CALLBACK
+        payload = build_job_payload(s, end_time=1015.0, user_email="o@t.com")
+        assert payload["customer_phone"] == "unknown"
+
+    def test_call_payload_uses_unknown_when_phone_empty(self):
+        s = CallSession(phone_number="")
+        s.call_sid = "CA_no_phone"
+        s.start_time = 1000.0
+        s.state = State.CALLBACK
+        payload = build_call_payload(s, end_time=1015.0, user_email="o@t.com")
+        assert payload["phone_number"] == "unknown"
+
+    def test_payloads_keep_real_phone_when_present(self, completed_session):
+        job = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        call = build_call_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert job["customer_phone"] == "+15125551234"
+        assert call["phone_number"] == "+15125551234"
+
+
 class TestDatetimeGuards:
     def test_started_at_never_empty_string(self):
         s = CallSession(phone_number="+15125551234")

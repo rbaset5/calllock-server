@@ -34,11 +34,23 @@ async def health():
 
 @app.api_route("/twiml", methods=["GET", "POST"])
 async def twiml(request: Request):
-    """Serve TwiML that tells Twilio to open a WebSocket stream to this server."""
+    """Serve TwiML that tells Twilio to open a WebSocket stream to this server.
+
+    Twilio sends caller info (From, To) in the POST body. We pass these as
+    custom parameters on the <Stream> so they're available in the WebSocket
+    handshake via parse_telephony_websocket → call_data["body"].
+    """
+    form = await request.form()
+    caller_from = form.get("From", "")
+    caller_to = form.get("To", "")
+
     xml = (
         '<Response>'
         '<Connect>'
-        f'<Stream url="wss://{HOST}.fly.dev/ws/twilio" />'
+        f'<Stream url="wss://{HOST}.fly.dev/ws/twilio">'
+        f'<Parameter name="From" value="{caller_from}" />'
+        f'<Parameter name="To" value="{caller_to}" />'
+        '</Stream>'
         '</Connect>'
         '</Response>'
     )

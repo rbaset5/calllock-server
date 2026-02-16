@@ -61,7 +61,7 @@ def build_job_payload(session: CallSession, end_time: float, user_email: str) ->
     payload = {
         # Required
         "customer_name": session.customer_name or "Unknown Caller",
-        "customer_phone": session.phone_number,
+        "customer_phone": session.phone_number or "unknown",
         "customer_address": session.service_address,
         "service_type": "hvac",
         "urgency": _map_urgency(session.urgency_tier),
@@ -110,7 +110,7 @@ def build_call_payload(session: CallSession, end_time: float, user_email: str) -
 
     return {
         "call_id": session.call_sid,
-        "phone_number": session.phone_number,
+        "phone_number": session.phone_number or "unknown",
         "customer_name": session.customer_name,
         "user_email": user_email,
         "started_at": start_dt,
@@ -162,7 +162,7 @@ async def handle_call_ended(session: CallSession):
     if session.state == State.SAFETY_EXIT:
         alert_payload = {
             "call_id": session.call_sid,
-            "phone_number": session.phone_number,
+            "phone_number": session.phone_number or "unknown",
             "customer_name": session.customer_name,
             "customer_address": session.service_address,
             "problem_description": session.problem_description or "Safety emergency detected",
