@@ -120,7 +120,10 @@ def build_call_payload(session: CallSession, end_time: float, user_email: str) -
         "urgency_tier": session.urgency_tier,
         "problem_description": session.problem_description,
         "booking_status": _derive_booking_status(session),
-        "transcript_object": to_json_array(session.transcript_log),
+        "transcript_object": [
+            e for e in to_json_array(session.transcript_log)
+            if e.get("role") in ("agent", "user")
+        ],
     }
 
 

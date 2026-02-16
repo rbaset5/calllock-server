@@ -216,3 +216,24 @@ class TestUrgencyMapping:
         completed_session.urgency_tier = ""
         payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
         assert payload["urgency"] == "low"
+
+
+class TestTranscriptFiltering:
+    def test_calls_payload_excludes_tool_entries(self, completed_session):
+        """Calls webhook schema only accepts role: agent|user."""
+        payload = build_call_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        roles = {entry["role"] for entry in payload["transcript_object"]}
+        assert "tool" not in roles
+        assert roles <= {"agent", "user"}
+
+    def test_calls_payload_preserves_agent_and_user(self, completed_session):
+        payload = build_call_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert len(payload["transcript_object"]) == 3  # 2 agent + 1 user (tool filtered)
+        assert payload["transcript_object"][0]["role"] == "agent"
+        assert payload["transcript_object"][1]["role"] == "user"
+        assert payload["transcript_object"][2]["role"] == "agent"
+
+    def test_jobs_transcript_plain_text_includes_tools(self, completed_session):
+        """Jobs uses plain text transcript which should still mention tools."""
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert "[Tool:" in payload["call_transcript"]
