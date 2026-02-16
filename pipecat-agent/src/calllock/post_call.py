@@ -103,8 +103,9 @@ def build_job_payload(session: CallSession, end_time: float, user_email: str) ->
 
 def build_call_payload(session: CallSession, end_time: float, user_email: str) -> dict:
     """Build the call record payload."""
-    start_dt = datetime.fromtimestamp(session.start_time, tz=timezone.utc).isoformat() if session.start_time > 0 else ""
-    end_dt = datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat() if end_time > 0 else ""
+    now_dt = datetime.now(timezone.utc).isoformat()
+    start_dt = datetime.fromtimestamp(session.start_time, tz=timezone.utc).isoformat() if session.start_time > 0 else now_dt
+    end_dt = datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat() if end_time > 0 else now_dt
     duration = int(end_time - session.start_time) if session.start_time > 0 else 0
 
     return {

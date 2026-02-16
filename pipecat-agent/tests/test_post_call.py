@@ -237,3 +237,23 @@ class TestTranscriptFiltering:
         """Jobs uses plain text transcript which should still mention tools."""
         payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
         assert "[Tool:" in payload["call_transcript"]
+
+
+class TestDatetimeGuards:
+    def test_started_at_never_empty_string(self):
+        s = CallSession(phone_number="+15125551234")
+        s.call_sid = "CA_test_zero"
+        s.start_time = 0.0  # default / unset
+        s.state = State.CALLBACK
+        payload = build_call_payload(s, end_time=1015.0, user_email="o@t.com")
+        assert payload["started_at"] != ""
+        assert "T" in payload["started_at"]  # ISO format
+
+    def test_ended_at_never_empty_string(self):
+        s = CallSession(phone_number="+15125551234")
+        s.call_sid = "CA_test_zero"
+        s.start_time = 0.0
+        s.state = State.CALLBACK
+        payload = build_call_payload(s, end_time=0.0, user_email="o@t.com")
+        assert payload["ended_at"] != ""
+        assert "T" in payload["ended_at"]
