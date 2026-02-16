@@ -11,6 +11,21 @@ from calllock.dashboard_sync import DashboardClient
 
 logger = logging.getLogger(__name__)
 
+# Dashboard expects: low | medium | high | emergency
+# Pipecat internal: routine | low | medium | high | emergency
+_URGENCY_MAP = {
+    "routine": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "emergency": "emergency",
+}
+
+
+def _map_urgency(internal: str) -> str:
+    """Map Pipecat internal urgency to dashboard enum."""
+    return _URGENCY_MAP.get(internal, "low")
+
 
 def _derive_end_call_reason(session: CallSession) -> str:
     """Map final session state to an end_call_reason string."""
@@ -49,7 +64,7 @@ def build_job_payload(session: CallSession, end_time: float, user_email: str) ->
         "customer_phone": session.phone_number,
         "customer_address": session.service_address,
         "service_type": "hvac",
-        "urgency": session.urgency_tier,
+        "urgency": _map_urgency(session.urgency_tier),
         "user_email": user_email,
 
         # Call tracking

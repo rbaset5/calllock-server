@@ -184,3 +184,35 @@ class TestHandleCallEnded:
 
         # Should not raise
         await handle_call_ended(completed_session)
+
+
+class TestUrgencyMapping:
+    def test_routine_maps_to_low(self, completed_session):
+        completed_session.urgency_tier = "routine"
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert payload["urgency"] == "low"
+
+    def test_low_stays_low(self, completed_session):
+        completed_session.urgency_tier = "low"
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert payload["urgency"] == "low"
+
+    def test_high_stays_high(self, completed_session):
+        completed_session.urgency_tier = "high"
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert payload["urgency"] == "high"
+
+    def test_emergency_stays_emergency(self, completed_session):
+        completed_session.urgency_tier = "emergency"
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert payload["urgency"] == "emergency"
+
+    def test_unknown_defaults_to_low(self, completed_session):
+        completed_session.urgency_tier = "banana"
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert payload["urgency"] == "low"
+
+    def test_empty_defaults_to_low(self, completed_session):
+        completed_session.urgency_tier = ""
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert payload["urgency"] == "low"
