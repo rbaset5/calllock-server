@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time as _time
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -48,12 +49,18 @@ class StateMachineProcessor(FrameProcessor):
         self.machine = machine
         self.tools = tools
         self.context = context
+        self._debounce_seconds = 0.4  # 400ms
+        self._debounce_task: asyncio.Task | None = None
+        self._debounce_buffer: list[str] = []
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
-            await self._handle_transcription(frame)
+            self._debounce_buffer.append(frame.text.strip())
+            if self._debounce_task and not self._debounce_task.done():
+                self._debounce_task.cancel()
+            self._debounce_task = asyncio.create_task(self._debounce_fire(frame))
         else:
             # Log agent responses flowing through
             if isinstance(frame, TextFrame) and frame.text.strip():
@@ -64,6 +71,16 @@ class StateMachineProcessor(FrameProcessor):
                 })
             # Pass through all other frames
             await self.push_frame(frame, direction)
+
+    async def _debounce_fire(self, original_frame: TranscriptionFrame):
+        """Wait for debounce period, then process coalesced text."""
+        await asyncio.sleep(self._debounce_seconds)
+        text = " ".join(self._debounce_buffer)
+        self._debounce_buffer.clear()
+        coalesced = TranscriptionFrame(
+            text=text, user_id=original_frame.user_id, timestamp=original_frame.timestamp
+        )
+        await self._handle_transcription(coalesced)
 
     async def _handle_transcription(self, frame: TranscriptionFrame):
         text = frame.text.strip()
