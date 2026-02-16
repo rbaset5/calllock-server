@@ -148,3 +148,119 @@ def classify_tags(session: CallSession, transcript_text: str) -> dict[str, list[
             tags["CONTEXT"].append(tag)
 
     return tags
+
+
+# --- Priority Detection ---
+
+REPLACEMENT_KEYWORDS = {"new system", "new unit", "new ac", "replacement", "replace", "install", "installation", "upgrade"}
+MAJOR_REPAIR_KEYWORDS = {"compressor", "heat exchanger", "evaporator", "condenser", "coil"}
+MINOR_KEYWORDS = {"thermostat", "filter", "noise", "strange sound", "weird noise"}
+MAINTENANCE_KEYWORDS = {"tune-up", "tuneup", "maintenance", "cleaning", "checkup"}
+
+
+def detect_priority(tags: dict[str, list[str]], booking_status: str) -> dict:
+    """Detect priority color from tags and booking status.
+
+    Returns {"color": str, "reason": str}.
+    Colors: red (callback risk), green (high-value), gray (spam), blue (standard).
+    """
+    # RED: hazard or recovery (frustrated customer)
+    if tags.get("HAZARD"):
+        return {"color": "red", "reason": f"Safety hazard: {', '.join(tags['HAZARD'])}"}
+    if tags.get("RECOVERY"):
+        return {"color": "red", "reason": f"Customer concern: {', '.join(tags['RECOVERY'])}"}
+
+    # GRAY: spam/vendor
+    if tags.get("NON_CUSTOMER"):
+        return {"color": "gray", "reason": f"Non-customer: {', '.join(tags['NON_CUSTOMER'])}"}
+
+    # GREEN: high-value / commercial
+    if tags.get("REVENUE"):
+        return {"color": "green", "reason": f"Revenue opportunity: {', '.join(tags['REVENUE'])}"}
+
+    # BLUE: standard
+    return {"color": "blue", "reason": "Standard residential service request"}
+
+
+def estimate_revenue_tier(problem_description: str, revenue_tags: list[str]) -> dict:
+    """Estimate revenue tier from problem description and tags.
+
+    Returns {"tier": str, "tier_label": str, "signals": list, "confidence": str}.
+    """
+    lower = problem_description.lower()
+    signals = []
+
+    # Check for R-22 (always replacement)
+    if "R22_RETROFIT" in revenue_tags:
+        signals.append("R-22/Freon system")
+        return {
+            "tier": "replacement",
+            "tier_label": "$$$$",
+            "signals": signals,
+            "confidence": "high",
+        }
+
+    # Tier 1: Replacement
+    for kw in REPLACEMENT_KEYWORDS:
+        if kw in lower:
+            signals.append(kw)
+    if signals:
+        return {
+            "tier": "replacement",
+            "tier_label": "$$$$",
+            "signals": signals,
+            "confidence": "high" if len(signals) >= 2 else "medium",
+        }
+
+    # Tier 2: Major repair
+    for kw in MAJOR_REPAIR_KEYWORDS:
+        if kw in lower:
+            signals.append(kw)
+    if signals:
+        return {
+            "tier": "major_repair",
+            "tier_label": "$$$",
+            "signals": signals,
+            "confidence": "medium",
+        }
+
+    # Tier 3: Minor
+    for kw in MINOR_KEYWORDS:
+        if kw in lower:
+            signals.append(kw)
+    if signals:
+        return {
+            "tier": "minor",
+            "tier_label": "$",
+            "signals": signals,
+            "confidence": "medium",
+        }
+
+    # Tier 4: Maintenance
+    for kw in MAINTENANCE_KEYWORDS:
+        if kw in lower:
+            signals.append(kw)
+    if signals:
+        return {
+            "tier": "minor",
+            "tier_label": "$",
+            "signals": signals,
+            "confidence": "medium",
+        }
+
+    # If problem text has content but no specific keywords → standard repair
+    if problem_description.strip():
+        return {
+            "tier": "standard_repair",
+            "tier_label": "$$",
+            "signals": ["general repair request"],
+            "confidence": "low",
+        }
+
+    # No signals at all → diagnostic
+    return {
+        "tier": "diagnostic",
+        "tier_label": "$$?",
+        "signals": [],
+        "confidence": "low",
+    }

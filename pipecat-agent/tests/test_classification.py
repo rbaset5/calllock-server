@@ -1,4 +1,4 @@
-from calllock.classification import classify_tags
+from calllock.classification import classify_tags, detect_priority, estimate_revenue_tier
 from calllock.session import CallSession
 from calllock.states import State
 
@@ -77,3 +77,76 @@ class TestClassifyTags:
         session.problem_description = "heating not working"
         tags = classify_tags(session, "")
         assert "REPAIR_HEATING" in tags["SERVICE_TYPE"]
+
+
+class TestDetectPriority:
+    def test_hazard_tags_produce_red(self):
+        tags = {"HAZARD": ["GAS_LEAK"], "RECOVERY": [], "REVENUE": [], "NON_CUSTOMER": []}
+        result = detect_priority(tags, "attempted_failed")
+        assert result["color"] == "red"
+
+    def test_recovery_tags_produce_red(self):
+        tags = {"HAZARD": [], "RECOVERY": ["COMPLAINT_NOFIX"], "REVENUE": [], "NON_CUSTOMER": []}
+        result = detect_priority(tags, "confirmed")
+        assert result["color"] == "red"
+
+    def test_commercial_produces_green(self):
+        tags = {"HAZARD": [], "RECOVERY": [], "REVENUE": ["HOT_LEAD"], "NON_CUSTOMER": []}
+        result = detect_priority(tags, "confirmed")
+        assert result["color"] == "green"
+
+    def test_vendor_produces_gray(self):
+        tags = {"HAZARD": [], "RECOVERY": [], "REVENUE": [], "NON_CUSTOMER": ["VENDOR_SALES"]}
+        result = detect_priority(tags, "not_requested")
+        assert result["color"] == "gray"
+
+    def test_standard_call_produces_blue(self):
+        tags = {"HAZARD": [], "RECOVERY": [], "REVENUE": [], "NON_CUSTOMER": []}
+        result = detect_priority(tags, "confirmed")
+        assert result["color"] == "blue"
+
+    def test_result_has_reason(self):
+        tags = {"HAZARD": ["GAS_LEAK"], "RECOVERY": [], "REVENUE": [], "NON_CUSTOMER": []}
+        result = detect_priority(tags, "confirmed")
+        assert isinstance(result["reason"], str)
+        assert len(result["reason"]) > 0
+
+
+class TestEstimateRevenueTier:
+    def test_replacement_keywords(self):
+        result = estimate_revenue_tier("I want a new AC system installed", [])
+        assert result["tier"] == "replacement"
+        assert result["tier_label"] == "$$$$"
+
+    def test_major_repair_keywords(self):
+        result = estimate_revenue_tier("compressor is dead", [])
+        assert result["tier"] == "major_repair"
+        assert result["tier_label"] == "$$$"
+
+    def test_standard_repair_default(self):
+        result = estimate_revenue_tier("AC is broken not cooling", [])
+        assert result["tier"] == "standard_repair"
+        assert result["tier_label"] == "$$"
+
+    def test_minor_keywords(self):
+        result = estimate_revenue_tier("thermostat is not responding", [])
+        assert result["tier"] == "minor"
+        assert result["tier_label"] == "$"
+
+    def test_diagnostic_fallback(self):
+        result = estimate_revenue_tier("", [])
+        assert result["tier"] == "diagnostic"
+        assert result["tier_label"] == "$$?"
+
+    def test_r22_signals_replacement(self):
+        result = estimate_revenue_tier("needs freon recharge", ["R22_RETROFIT"])
+        assert result["tier"] == "replacement"
+
+    def test_result_has_signals(self):
+        result = estimate_revenue_tier("compressor failed", [])
+        assert isinstance(result["signals"], list)
+        assert len(result["signals"]) > 0
+
+    def test_result_has_confidence(self):
+        result = estimate_revenue_tier("new system replacement", [])
+        assert result["confidence"] in ("low", "medium", "high")
