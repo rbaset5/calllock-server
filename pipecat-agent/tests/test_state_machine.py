@@ -280,3 +280,101 @@ class TestStructuralGuarantees:
 
     def test_booking_has_no_end_call(self, sm):
         assert "end_call" not in sm.available_tools(State.BOOKING)
+
+
+# --- state_turn_count reset ---
+
+class TestStateTurnCountReset:
+    """state_turn_count must reset to 0 on every state transition."""
+
+    def test_welcome_to_lookup_resets(self, sm, session):
+        session.state_turn_count = 3
+        sm.process(session, "my AC is broken")
+        assert session.state == State.LOOKUP
+        assert session.state_turn_count == 0
+
+    def test_welcome_to_callback_resets(self, sm, session):
+        session.state_turn_count = 3
+        sm.process(session, "I have a billing question")
+        assert session.state == State.CALLBACK
+        assert session.state_turn_count == 0
+
+    def test_safety_to_service_area_resets(self, sm, session):
+        session.state = State.SAFETY
+        session.state_turn_count = 4
+        sm.process(session, "no")
+        assert session.state == State.SERVICE_AREA
+        assert session.state_turn_count == 0
+
+    def test_safety_to_safety_exit_resets(self, sm, session):
+        session.state = State.SAFETY
+        session.state_turn_count = 3
+        sm.process(session, "yes I smell gas")
+        assert session.state == State.SAFETY_EXIT
+        assert session.state_turn_count == 0
+
+    def test_discovery_to_confirm_resets(self, sm, session):
+        session.state = State.DISCOVERY
+        session.state_turn_count = 4
+        session.customer_name = "Jonas"
+        session.problem_description = "AC broken"
+        session.service_address = "123 Main St"
+        sm.process(session, "")
+        assert session.state == State.CONFIRM
+        assert session.state_turn_count == 0
+
+    def test_confirm_to_booking_resets(self, sm, session):
+        session.state = State.CONFIRM
+        session.state_turn_count = 3
+        sm.process(session, "yes schedule me")
+        assert session.state == State.BOOKING
+        assert session.state_turn_count == 0
+
+    def test_confirm_to_callback_resets(self, sm, session):
+        session.state = State.CONFIRM
+        session.state_turn_count = 3
+        sm.process(session, "just have someone call me back")
+        assert session.state == State.CALLBACK
+        assert session.state_turn_count == 0
+
+    def test_safety_fragments_dont_leak_into_service_area(self, sm, session):
+        """Reproduces the actual bug from call CA2dbef953072c9722864a35abc3639b22.
+
+        3 transcription fragments in SAFETY inflated state_turn_count to 4.
+        After transition to SERVICE_AREA, 2 more turns pushed it to 6,
+        exceeding MAX_TURNS_PER_STATE (5) and falsely escalating to CALLBACK.
+        """
+        # Simulate: enter SAFETY after lookup
+        session.state = State.SAFETY
+        session.state_turn_count = 0
+
+        # 3 fragments from Deepgram STT
+        sm.process(session, "Yeah.")
+        sm.process(session, "Mhmm.")
+        sm.process(session, "Yeah. It's a broken cover.")
+        assert session.state == State.SAFETY  # still in SAFETY
+
+        # Actual safety response
+        sm.process(session, "No.")
+        assert session.state == State.SERVICE_AREA
+        assert session.state_turn_count == 0  # BUG: was 5 before fix
+
+        # Two SERVICE_AREA turns should NOT trigger turn limit
+        sm.process(session, "Combat Road")
+        assert session.state == State.SERVICE_AREA
+
+        sm.process(session, "seven eight seven zero one")
+        assert session.state == State.DISCOVERY  # BUG: was CALLBACK before fix
+
+    def test_turn_limit_still_fires_within_state(self, sm, session):
+        """Turn limit must still work when turns accumulate in a single state."""
+        session.state = State.SAFETY
+        session.state_turn_count = 0
+
+        # 6 turns in SAFETY (exceeds MAX_TURNS_PER_STATE=5)
+        for _ in range(5):
+            sm.process(session, "what do you mean?")
+        assert session.state == State.SAFETY
+
+        sm.process(session, "what?")
+        assert session.state == State.CALLBACK  # turn limit fires

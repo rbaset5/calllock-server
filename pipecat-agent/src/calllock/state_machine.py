@@ -140,8 +140,10 @@ class StateMachine:
         intent = classify_intent(text)
         if intent == "non_service":
             session.state = State.CALLBACK
+            session.state_turn_count = 0
             return Action(needs_llm=True)
         session.state = State.LOOKUP
+        session.state_turn_count = 0
         return Action(call_tool="lookup_caller", needs_llm=False)
 
     def _handle_lookup(self, session: CallSession, text: str) -> Action:
@@ -150,12 +152,14 @@ class StateMachine:
     def _handle_safety(self, session: CallSession, text: str) -> Action:
         if detect_safety_emergency(text):
             session.state = State.SAFETY_EXIT
+            session.state_turn_count = 0
             return Action(needs_llm=True)
         # Look for clear "no" signals
         lower = text.lower()
         no_signals = ["no", "nope", "nah", "nothing like that", "we're fine", "all good"]
         if any(signal in lower for signal in no_signals):
             session.state = State.SERVICE_AREA
+            session.state_turn_count = 0
             return Action(needs_llm=True)
         # Unclear — stay in safety, LLM asks again
         return Action(needs_llm=True)
@@ -194,6 +198,7 @@ class StateMachine:
 
         if all([session.customer_name, session.problem_description, session.service_address]):
             session.state = State.CONFIRM
+            session.state_turn_count = 0
         return Action(needs_llm=True)
 
     def _handle_confirm(self, session: CallSession, text: str) -> Action:
@@ -203,6 +208,7 @@ class StateMachine:
         callback_signals = ["call me back", "callback", "just call", "have someone call"]
         if any(signal in lower for signal in callback_signals):
             session.state = State.CALLBACK
+            session.state_turn_count = 0
             return Action(needs_llm=True)
 
         # Check for high-ticket lead
@@ -215,8 +221,10 @@ class StateMachine:
             session.caller_confirmed = True
             if session.lead_type == "high_ticket":
                 session.state = State.CALLBACK
+                session.state_turn_count = 0
                 return Action(call_tool="send_sales_lead_alert", needs_llm=True)
             session.state = State.BOOKING
+            session.state_turn_count = 0
             return Action(needs_llm=True)
 
         return Action(needs_llm=True)
