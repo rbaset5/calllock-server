@@ -80,3 +80,69 @@ class TestTranscriptionDebounce:
         assert len(user_entries) == 1
         assert "Yeah." in user_entries[0]["content"]
         assert "It's broken." in user_entries[0]["content"]
+
+
+class TestNonBlockingExtraction:
+    @pytest.mark.asyncio
+    async def test_extraction_runs_in_background(self, processor):
+        """Extraction should not block the transcription frame from reaching the LLM."""
+        processor._debounce_seconds = 0.05
+
+        # Make extraction take 500ms (simulating real GPT-4o-mini call)
+        extraction_started = asyncio.Event()
+        extraction_finished = asyncio.Event()
+
+        async def slow_extraction():
+            extraction_started.set()
+            await asyncio.sleep(0.5)
+            extraction_finished.set()
+
+        processor._run_extraction = slow_extraction
+
+        # Put processor in discovery state (triggers extraction)
+        processor.session.state = State.DISCOVERY
+        processor.session.conversation_history = [
+            {"role": "user", "content": "hello"},
+            {"role": "agent", "content": "hi"},
+        ]
+
+        await processor.process_frame(
+            TranscriptionFrame(text="My AC is broken.", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
+        await asyncio.sleep(0.1)  # Let debounce fire
+
+        # Frame should have been pushed downstream BEFORE extraction finishes
+        assert processor.push_frame.called, "Frame should be pushed without waiting for extraction"
+        assert extraction_started.is_set(), "Extraction should have started"
+        assert not extraction_finished.is_set(), "Extraction should still be running (non-blocking)"
+
+        # Wait for extraction to finish
+        await asyncio.sleep(0.5)
+        assert extraction_finished.is_set(), "Extraction should finish in background"
+
+    @pytest.mark.asyncio
+    async def test_extraction_error_does_not_crash(self, processor):
+        """If background extraction raises, it should log and not crash the pipeline."""
+        processor._debounce_seconds = 0.05
+
+        async def exploding_extraction():
+            raise RuntimeError("extraction boom")
+
+        processor._run_extraction = exploding_extraction
+
+        processor.session.state = State.DISCOVERY
+        processor.session.conversation_history = [
+            {"role": "user", "content": "hello"},
+            {"role": "agent", "content": "hi"},
+        ]
+
+        # Should not raise
+        await processor.process_frame(
+            TranscriptionFrame(text="My AC is broken.", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
+        await asyncio.sleep(0.15)  # Let debounce fire + extraction attempt
+
+        # Pipeline still works
+        assert processor.push_frame.called

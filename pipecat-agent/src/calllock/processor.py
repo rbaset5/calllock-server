@@ -49,7 +49,7 @@ class StateMachineProcessor(FrameProcessor):
         self.machine = machine
         self.tools = tools
         self.context = context
-        self._debounce_seconds = 0.4  # 400ms
+        self._debounce_seconds = 0.2  # 200ms
         self._debounce_task: asyncio.Task | None = None
         self._debounce_buffer: list[str] = []
 
@@ -106,9 +106,9 @@ class StateMachineProcessor(FrameProcessor):
         # Update system prompt for current state
         self.context.messages[0]["content"] = get_system_prompt(self.session)
 
-        # Run extraction to populate session fields from conversation
+        # Run extraction in background — results only matter for the next turn
         if self.session.state.value in ("service_area", "discovery", "confirm"):
-            await self._run_extraction()
+            asyncio.create_task(self._safe_extraction())
 
         # If action has a canned speak message, use it instead of LLM
         if action.speak:
@@ -171,6 +171,13 @@ class StateMachineProcessor(FrameProcessor):
             "result": result,
             "timestamp": _time.time(),
         })
+
+    async def _safe_extraction(self):
+        """Run extraction in background, catching errors to prevent silent crashes."""
+        try:
+            await self._run_extraction()
+        except Exception as e:
+            logger.error(f"Background extraction failed: {e}")
 
     async def _run_extraction(self):
         """Extract structured fields from conversation using LLM."""
