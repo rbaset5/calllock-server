@@ -51,6 +51,29 @@ STATE_TOOLS = {
 }
 
 
+WORD_TO_DIGIT = {
+    "zero": "0", "oh": "0", "o": "0",
+    "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+}
+
+
+def words_to_digits(text: str) -> str:
+    """Convert spoken number words to digit string.
+
+    'seven eight seven zero one' -> '78701'
+    'seven eight seven oh one' -> '78701'
+    """
+    tokens = re.findall(r"[a-zA-Z]+|\d", text.lower())
+    digits = []
+    for tok in tokens:
+        if tok in WORD_TO_DIGIT:
+            digits.append(WORD_TO_DIGIT[tok])
+        elif tok.isdigit():
+            digits.append(tok)
+    return "".join(digits)
+
+
 class StateMachine:
     def valid_transitions(self, state: State) -> set[State]:
         return TRANSITIONS.get(state, set())
@@ -106,15 +129,24 @@ class StateMachine:
     def _handle_service_area(self, session: CallSession, text: str) -> Action:
         # Try to extract ZIP from text if not already known
         if not session.zip_code:
+            # First try raw digits: "78701"
             zip_match = re.search(r"\b(\d{5})\b", text)
             if zip_match:
                 session.zip_code = validate_zip(zip_match.group(1))
+
+            # Then try spoken words: "seven eight seven zero one"
+            if not session.zip_code:
+                digit_str = words_to_digits(text)
+                zip_match = re.search(r"(\d{5})", digit_str)
+                if zip_match:
+                    session.zip_code = validate_zip(zip_match.group(1))
 
         if session.zip_code:
             if is_service_area(session.zip_code):
                 session.state = State.DISCOVERY
             else:
                 session.state = State.CALLBACK
+            session.state_turn_count = 0
             return Action(needs_llm=True)
         # No valid ZIP yet — stay, LLM asks
         return Action(needs_llm=True)

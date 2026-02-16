@@ -1,7 +1,7 @@
 import pytest
 from calllock.session import CallSession
 from calllock.states import State
-from calllock.state_machine import StateMachine, Action
+from calllock.state_machine import StateMachine, Action, words_to_digits
 
 
 @pytest.fixture
@@ -113,6 +113,43 @@ class TestServiceAreaState:
         session.state = State.SERVICE_AREA
         action = sm.process(session, "it's 787")
         assert session.state == State.SERVICE_AREA
+
+    def test_spoken_zip_parsed(self, sm, session):
+        session.state = State.SERVICE_AREA
+        action = sm.process(session, "seven eight seven zero one")
+        assert session.zip_code == "78701"
+        assert session.state == State.DISCOVERY
+
+    def test_spoken_zip_with_oh(self, sm, session):
+        session.state = State.SERVICE_AREA
+        action = sm.process(session, "seven eight seven oh one")
+        assert session.zip_code == "78701"
+        assert session.state == State.DISCOVERY
+
+    def test_spoken_zip_in_sentence(self, sm, session):
+        session.state = State.SERVICE_AREA
+        action = sm.process(session, "my zip is seven eight seven four five")
+        assert session.zip_code == "78745"
+        assert session.state == State.DISCOVERY
+
+
+# --- words_to_digits ---
+
+class TestWordsToDigits:
+    def test_full_spoken_zip(self):
+        assert words_to_digits("seven eight seven zero one") == "78701"
+
+    def test_oh_as_zero(self):
+        assert words_to_digits("seven eight seven oh one") == "78701"
+
+    def test_mixed_words_and_digits(self):
+        assert words_to_digits("seven 8 seven 0 one") == "78701"
+
+    def test_no_numbers(self):
+        assert words_to_digits("hello world") == ""
+
+    def test_raw_digits(self):
+        assert words_to_digits("78701") == "78701"
 
 
 # --- DISCOVERY state ---

@@ -3,6 +3,7 @@ import time
 import logging
 from fastapi import WebSocket
 
+import aiohttp
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -12,10 +13,12 @@ from pipecat.transports.websocket.fastapi import (
 )
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService, OpenAILLMContext
-from pipecat.services.cartesia.tts import CartesiaTTSService
-from pipecat.frames.frames import LLMMessagesFrame
+from pipecat.services.inworld.tts import InworldHttpTTSService
+from pipecat.services.deepgram.tts import DeepgramHttpTTSService
+from pipecat.frames.frames import LLMMessagesFrame, TTSSpeakFrame
 from pipecat.runner.utils import parse_telephony_websocket
 
 from calllock.session import CallSession
@@ -25,6 +28,7 @@ from calllock.tools import V2Client
 from calllock.processor import StateMachineProcessor
 from calllock.audio_resample import AudioResampleProcessor
 from calllock.post_call import handle_call_ended
+from calllock.tts_fallback import FallbackTTSService
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +64,14 @@ async def create_pipeline(websocket: WebSocket):
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            vad_analyzer=SileroVADAnalyzer(),
+            vad_analyzer=SileroVADAnalyzer(
+                params=VADParams(
+                    confidence=0.85,   # Higher threshold to ignore TV/background noise
+                    start_secs=0.4,    # Require 400ms of speech before triggering
+                    stop_secs=0.3,     # Wait 300ms of silence before ending utterance
+                    min_volume=0.8,    # Ignore quieter sounds (TV, ambient noise)
+                ),
+            ),
             serializer=serializer,
         ),
     )
@@ -73,9 +84,32 @@ async def create_pipeline(websocket: WebSocket):
         model="gpt-4o",
     )
 
-    tts = CartesiaTTSService(
-        api_key=os.getenv("CARTESIA_API_KEY"),
-        voice_id=os.getenv("CARTESIA_VOICE_ID", "a5136bf9-224c-4d76-b823-52bd5efcffcc"),
+    http_session = aiohttp.ClientSession()
+
+    primary_tts = InworldHttpTTSService(
+        api_key=os.getenv("INWORLD_API_KEY"),
+        aiohttp_session=http_session,
+        voice_id=os.getenv("INWORLD_VOICE_ID", "Ashley"),
+        model=os.getenv("INWORLD_MODEL", "inworld-tts-1.5-max"),
+        streaming=True,
+        sample_rate=16000,
+        aggregate_sentences=False,
+    )
+
+    fallback_tts = DeepgramHttpTTSService(
+        api_key=os.getenv("DEEPGRAM_API_KEY"),
+        aiohttp_session=http_session,
+        voice=os.getenv("DEEPGRAM_TTS_VOICE", "aura-2-helena-en"),
+        sample_rate=16000,
+        encoding="linear16",
+        aggregate_sentences=False,
+    )
+
+    tts = FallbackTTSService(
+        primary=primary_tts,
+        fallback=fallback_tts,
+        primary_timeout=5.0,
+        sample_rate=16000,
     )
 
     # LLM context with initial system prompt
@@ -112,16 +146,21 @@ async def create_pipeline(websocket: WebSocket):
         params=PipelineParams(
             audio_in_sample_rate=8000,
             audio_out_sample_rate=8000,
+            allow_interruptions=True,
         ),
     )
 
-    # Send initial greeting on connect
+    # Send greeting directly via TTS (bypasses LLM for speed + avoids VAD interruption)
+    greeting = "Thanks for calling ACE Cooling, how can I help you?"
+
     @transport.event_handler("on_client_connected")
     async def on_connected(transport, client):
-        await task.queue_frames([LLMMessagesFrame(messages)])
+        # Speak the greeting directly — no LLM round-trip
+        await task.queue_frames([TTSSpeakFrame(greeting)])
 
     runner = PipelineRunner()
     await runner.run(task)
+    await http_session.close()
 
     # Post-call: classify and sync to dashboard
     try:

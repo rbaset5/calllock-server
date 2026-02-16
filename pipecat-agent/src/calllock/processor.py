@@ -88,8 +88,8 @@ class StateMachineProcessor(FrameProcessor):
         # Update system prompt for current state
         self.context.messages[0]["content"] = get_system_prompt(self.session)
 
-        # Run extraction in discovery/confirm states to populate session fields
-        if self.session.state.value in ("discovery", "confirm"):
+        # Run extraction to populate session fields from conversation
+        if self.session.state.value in ("service_area", "discovery", "confirm"):
             await self._run_extraction()
 
         # End the call if needed
