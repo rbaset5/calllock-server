@@ -31,6 +31,11 @@ class CallSession:
     # From callback
     callback_created: bool = False
 
+    # Call metadata (set at pipeline start, used in post-call)
+    call_sid: str = ""
+    start_time: float = 0.0
+    transcript_log: list = field(default_factory=list)
+
     # Metadata
     turn_count: int = 0
     state_turn_count: int = 0
