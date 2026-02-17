@@ -121,6 +121,10 @@ class StateMachineProcessor(FrameProcessor):
         # Run state machine
         action = self.machine.process(self.session, text)
 
+        # Speak canned message immediately (e.g., "One moment" before a slow tool call)
+        if action.speak:
+            await self.push_frame(TTSSpeakFrame(text=action.speak), FrameDirection.DOWNSTREAM)
+
         # Handle tool calls
         if action.call_tool:
             await self._execute_tool(action)
@@ -131,13 +135,6 @@ class StateMachineProcessor(FrameProcessor):
         # Run extraction in background — results only matter for the next turn
         if self.session.state.value in ("service_area", "discovery", "confirm"):
             asyncio.create_task(self._safe_extraction())
-
-        # If action has a canned speak message, use it instead of LLM
-        if action.speak:
-            await self.push_frame(TTSSpeakFrame(text=action.speak), FrameDirection.DOWNSTREAM)
-            if action.end_call:
-                await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
-            return
 
         # End the call if needed
         if action.end_call:
@@ -152,6 +149,11 @@ class StateMachineProcessor(FrameProcessor):
         # Pass transcription downstream if LLM should generate response
         if action.needs_llm:
             await self.push_frame(frame, FrameDirection.DOWNSTREAM)
+        else:
+            # Preserve user text in LLM context even when LLM won't respond.
+            # Without this, user speech during WELCOME/LOOKUP is invisible
+            # to the LLM on its next turn.
+            self.context.messages.append({"role": "user", "content": text})
 
     async def _delayed_end_call(self, delay: float = 3.0):
         """Push EndFrame after a delay to allow TTS to finish speaking."""

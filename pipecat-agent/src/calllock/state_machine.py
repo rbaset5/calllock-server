@@ -144,7 +144,7 @@ class StateMachine:
             return Action(needs_llm=True)
         session.state = State.LOOKUP
         session.state_turn_count = 0
-        return Action(call_tool="lookup_caller", needs_llm=False)
+        return Action(call_tool="lookup_caller", speak="One moment.", needs_llm=False)
 
     def _handle_lookup(self, session: CallSession, text: str) -> Action:
         return Action(call_tool="lookup_caller", needs_llm=False)
