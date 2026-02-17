@@ -27,7 +27,7 @@ import { getCustomerHistory } from "./services/customer-history.js";
 // Infrastructure imports
 import { logger, maskPhone } from "./utils/logger.js";
 import { runHealthChecks } from "./utils/health.js";
-import { apiKeyAuth, retellWebhookAuth } from "./middleware/auth.js";
+import { apiKeyAuth, retellWebhookAuth, combinedAuth } from "./middleware/auth.js";
 import {
   validate,
   lookupRequestSchema,
@@ -229,7 +229,7 @@ app.post("/api/bookings/reschedule", async (req: Request, res: Response) => {
 // ============================================
 
 // ALL Retell webhooks must be authenticated
-app.use("/webhook/retell", retellWebhookAuth);
+app.use("/webhook/retell", combinedAuth);
 
 // ============================================
 // Retell Post-Call Webhook (Dashboard Integration)
