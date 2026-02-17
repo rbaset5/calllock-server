@@ -72,5 +72,6 @@ One sentence only.""",
 Brief and positive.""",
 
     State.CALLBACK: """Say: "I'll have someone reach out. Is this the best number?"
-Then wrap: "Anything else? Great, have a good one." """,
+Then wrap: "Anything else? Great, have a good one."
+If caller has an existing appointment: "I see you have an appointment on file. The team will reach out with the details." """,
 }

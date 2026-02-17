@@ -80,6 +80,26 @@ class TestSafetyState:
         assert session.state == State.SAFETY
 
 
+# --- Existing appointment routing ---
+
+class TestExistingAppointmentRouting:
+    def test_has_appointment_routes_to_callback_after_safety(self, sm, session):
+        """When lookup found an existing appointment and safety is clear,
+        skip SERVICE_AREA and go straight to CALLBACK."""
+        session.state = State.SAFETY
+        session.has_appointment = True
+        action = sm.process(session, "no nothing like that")
+        assert session.state == State.CALLBACK
+        assert session.state_turn_count == 0
+
+    def test_no_appointment_still_routes_to_service_area(self, sm, session):
+        """Without an existing appointment, safety-clear still goes to SERVICE_AREA."""
+        session.state = State.SAFETY
+        session.has_appointment = False
+        action = sm.process(session, "no")
+        assert session.state == State.SERVICE_AREA
+
+
 # --- SAFETY_EXIT state ---
 
 class TestSafetyExitState:
@@ -272,6 +292,53 @@ class TestCallbackToolResult:
         session.state = State.CALLBACK
         sm.handle_tool_result(session, "create_callback", {"error": "V2 backend unavailable"})
         assert session.callback_created is False
+
+    def test_callback_attempts_incremented_on_failure(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"error": "V2 backend unavailable"})
+        assert session.callback_attempts == 1
+
+    def test_callback_attempts_not_incremented_on_success(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"success": True})
+        assert session.callback_attempts == 0
+
+
+class TestCallbackRetryLimit:
+    def test_gives_up_after_max_attempts(self, sm, session):
+        session.state = State.CALLBACK
+        session.callback_attempts = 2
+        action = sm.process(session, "anything")
+        assert action.end_call is True
+        assert action.call_tool == ""
+
+    def test_retries_before_max_attempts(self, sm, session):
+        session.state = State.CALLBACK
+        session.callback_attempts = 1
+        action = sm.process(session, "anything")
+        assert action.call_tool == "create_callback"
+        assert action.end_call is False
+
+    def test_full_retry_cycle(self, sm, session):
+        """Simulate: 2 failures then give up."""
+        session.state = State.CALLBACK
+
+        # Attempt 1: fires tool
+        action = sm.process(session, "ok")
+        assert action.call_tool == "create_callback"
+        sm.handle_tool_result(session, "create_callback", {"error": "V2 backend unavailable"})
+        assert session.callback_attempts == 1
+
+        # Attempt 2: fires tool again
+        action = sm.process(session, "ok")
+        assert action.call_tool == "create_callback"
+        sm.handle_tool_result(session, "create_callback", {"error": "V2 backend unavailable"})
+        assert session.callback_attempts == 2
+
+        # Attempt 3: gives up, ends call
+        action = sm.process(session, "ok")
+        assert action.call_tool == ""
+        assert action.end_call is True
 
 
 # --- Structural guarantees ---

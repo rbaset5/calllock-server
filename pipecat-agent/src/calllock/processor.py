@@ -5,6 +5,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.frames.frames import (
     Frame,
     TranscriptionFrame,
+    InterimTranscriptionFrame,
     LLMMessagesFrame,
     EndFrame,
     TextFrame,
@@ -52,6 +53,7 @@ class StateMachineProcessor(FrameProcessor):
         self._debounce_seconds = 0.4  # Must exceed VAD stop_secs (0.3) to prevent split utterances
         self._debounce_task: asyncio.Task | None = None
         self._debounce_buffer: list[str] = []
+        self._context_capture_idx = 1  # Skip system message at index 0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -61,15 +63,11 @@ class StateMachineProcessor(FrameProcessor):
             if self._debounce_task and not self._debounce_task.done():
                 self._debounce_task.cancel()
             self._debounce_task = asyncio.create_task(self._debounce_fire(frame))
+        elif isinstance(frame, InterimTranscriptionFrame):
+            # Ignore interim STT — these are partial user speech fragments,
+            # not agent responses. They extend TextFrame but not TranscriptionFrame.
+            await self.push_frame(frame, direction)
         else:
-            # Log agent responses flowing through
-            if isinstance(frame, TextFrame) and frame.text.strip():
-                self.session.transcript_log.append({
-                    "role": "agent",
-                    "content": frame.text,
-                    "timestamp": _time.time(),
-                })
-            # Pass through all other frames
             await self.push_frame(frame, direction)
 
     async def _debounce_fire(self, original_frame: TranscriptionFrame):
@@ -82,7 +80,31 @@ class StateMachineProcessor(FrameProcessor):
         )
         await self._handle_transcription(coalesced)
 
+    def _capture_agent_responses(self):
+        """Capture new assistant messages from LLM context to transcript log.
+
+        The LLM output flows downstream (LLM → TTS → transport), bypassing
+        this processor. We read agent responses from the context aggregator's
+        message list instead.
+        """
+        while self._context_capture_idx < len(self.context.messages):
+            msg = self.context.messages[self._context_capture_idx]
+            if msg.get("role") == "assistant" and msg.get("content"):
+                self.session.transcript_log.append({
+                    "role": "agent",
+                    "content": msg["content"],
+                    "timestamp": _time.time(),
+                })
+            self._context_capture_idx += 1
+
+    def flush_transcript(self):
+        """Capture any remaining agent responses. Call before post-call processing."""
+        self._capture_agent_responses()
+
     async def _handle_transcription(self, frame: TranscriptionFrame):
+        # Capture any agent responses from previous turn
+        self._capture_agent_responses()
+
         text = frame.text.strip()
         logger.info(f"[{self.session.state.value}] Caller: {text}")
 

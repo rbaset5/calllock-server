@@ -7,7 +7,7 @@ from calllock.state_machine import StateMachine
 from calllock.states import State
 
 from pipecat.processors.frame_processor import FrameDirection
-from pipecat.frames.frames import TranscriptionFrame, EndFrame
+from pipecat.frames.frames import TranscriptionFrame, InterimTranscriptionFrame, EndFrame
 
 
 @pytest.fixture
@@ -180,3 +180,63 @@ class TestEndCallAfterLLM:
         pushed_frames = [call.args[0] for call in processor.push_frame.call_args_list]
         frame_types = [type(f).__name__ for f in pushed_frames]
         assert "EndFrame" in frame_types, f"EndFrame not found in pushed frames: {frame_types}"
+
+
+class TestTranscriptLogging:
+    """Transcript log must capture actual agent responses, not interim STT."""
+
+    @pytest.mark.asyncio
+    async def test_interim_transcription_not_logged_as_agent(self, processor):
+        """InterimTranscriptionFrame (partial STT) must NOT be logged as agent speech.
+
+        Bug: InterimTranscriptionFrame extends TextFrame (not TranscriptionFrame),
+        so the processor's else branch caught it and logged as role=agent.
+        """
+        interim = InterimTranscriptionFrame(text="I have a prob", user_id="test", timestamp="")
+        await processor.process_frame(interim, FrameDirection.DOWNSTREAM)
+
+        agent_entries = [e for e in processor.session.transcript_log if e["role"] == "agent"]
+        assert len(agent_entries) == 0, (
+            f"Interim STT was incorrectly logged as agent: {agent_entries}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_agent_responses_captured_from_context(self, processor):
+        """Actual LLM responses (in context.messages) should be logged as agent speech.
+
+        The LLM output flows downstream past the processor, so the processor
+        must capture agent responses from the LLM context on each user turn.
+        """
+        processor._debounce_seconds = 0.05
+
+        # Simulate: greeting is already in context (added by context_aggregator)
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+            {"role": "assistant", "content": "Thanks for calling ACE Cooling, how can I help you?"},
+        ]
+
+        # First user utterance arrives
+        await processor.process_frame(
+            TranscriptionFrame(text="My AC is broken", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
+        await asyncio.sleep(0.1)  # Let debounce fire
+
+        # The greeting should now be in the transcript as agent
+        agent_entries = [e for e in processor.session.transcript_log if e["role"] == "agent"]
+        assert len(agent_entries) >= 1, "Greeting should be captured as agent response"
+        assert "ACE Cooling" in agent_entries[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_flush_captures_final_agent_response(self, processor):
+        """flush_transcript() should capture any remaining agent messages from context."""
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+            {"role": "assistant", "content": "Goodbye, have a great day!"},
+        ]
+
+        processor.flush_transcript()
+
+        agent_entries = [e for e in processor.session.transcript_log if e["role"] == "agent"]
+        assert len(agent_entries) == 1
+        assert "Goodbye" in agent_entries[0]["content"]

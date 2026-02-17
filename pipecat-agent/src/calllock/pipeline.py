@@ -174,6 +174,9 @@ async def create_pipeline(websocket: WebSocket):
     await runner.run(task)
     await http_session.close()
 
+    # Flush final agent responses to transcript before post-call processing
+    sm_processor.flush_transcript()
+
     # Post-call: classify and sync to dashboard
     try:
         await handle_call_ended(session)

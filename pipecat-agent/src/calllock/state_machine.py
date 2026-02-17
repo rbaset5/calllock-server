@@ -34,7 +34,7 @@ class Action:
 TRANSITIONS = {
     State.WELCOME: {State.LOOKUP, State.CALLBACK},
     State.LOOKUP: {State.SAFETY, State.CALLBACK},
-    State.SAFETY: {State.SERVICE_AREA, State.SAFETY_EXIT},
+    State.SAFETY: {State.SERVICE_AREA, State.SAFETY_EXIT, State.CALLBACK},
     State.SAFETY_EXIT: set(),
     State.SERVICE_AREA: {State.DISCOVERY, State.CALLBACK},
     State.DISCOVERY: {State.CONFIRM},
@@ -158,6 +158,11 @@ class StateMachine:
         lower = text.lower()
         no_signals = ["no", "nope", "nah", "nothing like that", "we're fine", "all good"]
         if any(signal in lower for signal in no_signals):
+            # Existing appointment: skip service flow, route to callback
+            if session.has_appointment:
+                session.state = State.CALLBACK
+                session.state_turn_count = 0
+                return Action(needs_llm=True)
             session.state = State.SERVICE_AREA
             session.state_turn_count = 0
             return Action(needs_llm=True)
@@ -238,6 +243,13 @@ class StateMachine:
     def _handle_callback(self, session: CallSession, text: str) -> Action:
         if session.callback_created:
             return Action(end_call=True, needs_llm=True)
+        # Give up after 2 failed attempts — end call gracefully
+        if session.callback_attempts >= 2:
+            logger.warning(
+                "Callback creation failed after %d attempts — ending call gracefully",
+                session.callback_attempts,
+            )
+            return Action(end_call=True, needs_llm=True)
         return Action(call_tool="create_callback", needs_llm=True)
 
     # --- Tool result handlers ---
@@ -264,6 +276,7 @@ class StateMachine:
     def _tool_result_create_callback(self, session: CallSession, result: dict):
         if result.get("error"):
             session.callback_created = False
+            session.callback_attempts += 1
         else:
             session.callback_created = True
 

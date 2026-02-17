@@ -30,6 +30,7 @@ class CallSession:
 
     # From callback
     callback_created: bool = False
+    callback_attempts: int = 0
 
     # Call metadata (set at pipeline start, used in post-call)
     call_sid: str = ""
