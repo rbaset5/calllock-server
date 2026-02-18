@@ -80,6 +80,7 @@ class StateMachineProcessor(FrameProcessor):
                     "role": "agent",
                     "content": msg["content"],
                     "timestamp": _time.time(),
+                    "state": self.session.state.value,
                 })
             self._context_capture_idx += 1
 
@@ -104,6 +105,7 @@ class StateMachineProcessor(FrameProcessor):
             "role": "user",
             "content": text,
             "timestamp": _time.time(),
+            "state": self.session.state.value,
         })
 
         # Run state machine
@@ -205,6 +207,7 @@ class StateMachineProcessor(FrameProcessor):
             "name": tool,
             "result": result,
             "timestamp": _time.time(),
+            "state": self.session.state.value,
         })
 
     async def _safe_extraction(self):

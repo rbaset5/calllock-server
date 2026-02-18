@@ -32,7 +32,7 @@ def test_session_has_call_metadata_fields():
 
 def test_session_transcript_log_accumulates():
     s = CallSession(phone_number="+15125551234")
-    s.transcript_log.append({"role": "agent", "content": "Hello", "timestamp": 1000.0})
-    s.transcript_log.append({"role": "user", "content": "Hi", "timestamp": 1001.0})
+    s.transcript_log.append({"role": "agent", "content": "Hello", "timestamp": 1000.0, "state": "welcome"})
+    s.transcript_log.append({"role": "user", "content": "Hi", "timestamp": 1001.0, "state": "welcome"})
     assert len(s.transcript_log) == 2
     assert s.transcript_log[0]["role"] == "agent"

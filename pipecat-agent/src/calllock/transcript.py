@@ -39,3 +39,48 @@ def to_json_array(log: list[dict]) -> list[dict]:
                 "result": entry.get("result", {}),
             })
     return result
+
+
+def to_timestamped_dump(
+    log: list[dict],
+    start_time: float,
+    call_sid: str,
+    phone: str,
+    final_state: str,
+) -> dict:
+    """Build a timestamped transcript dump dict for structured logging.
+
+    Timestamps are converted to relative seconds from call start.
+    If start_time is 0, uses the first entry's timestamp as base.
+    Entries missing a timestamp key are skipped.
+    """
+    base_time = start_time
+    if base_time <= 0 and log:
+        for entry in log:
+            if "timestamp" in entry:
+                base_time = entry["timestamp"]
+                break
+
+    entries = []
+    for entry in log:
+        if "timestamp" not in entry:
+            continue
+        e = {
+            "t": round(entry["timestamp"] - base_time, 1),
+            "role": entry["role"],
+            "state": entry.get("state", ""),
+        }
+        if "content" in entry:
+            e["content"] = entry["content"]
+        if "name" in entry:
+            e["name"] = entry["name"]
+        if "result" in entry:
+            e["result"] = entry["result"]
+        entries.append(e)
+
+    return {
+        "call_sid": call_sid,
+        "phone": phone,
+        "final_state": final_state,
+        "entries": entries,
+    }

@@ -1,8 +1,10 @@
+import json
+import logging
 import pytest
 import httpx
 import respx
 import time
-from calllock.post_call import handle_call_ended, build_job_payload, build_call_payload
+from calllock.post_call import handle_call_ended, build_job_payload, build_call_payload, chunk_transcript_dump
 from calllock.session import CallSession
 from calllock.states import State
 
@@ -24,10 +26,10 @@ def completed_session():
     s.booked_time = "2026-02-20T10:00:00"
     s.urgency_tier = "routine"
     s.transcript_log = [
-        {"role": "agent", "content": "Thanks for calling ACE Cooling.", "timestamp": 1000.0},
-        {"role": "user", "content": "My AC is blowing warm air.", "timestamp": 1002.0},
-        {"role": "tool", "name": "book_service", "result": {"booked": True}, "timestamp": 1010.0},
-        {"role": "agent", "content": "You're all set for tomorrow morning.", "timestamp": 1012.0},
+        {"role": "agent", "content": "Thanks for calling ACE Cooling.", "timestamp": 1000.0, "state": "welcome"},
+        {"role": "user", "content": "My AC is blowing warm air.", "timestamp": 1002.0, "state": "welcome"},
+        {"role": "tool", "name": "book_service", "result": {"booked": True}, "timestamp": 1010.0, "state": "booking"},
+        {"role": "agent", "content": "You're all set for tomorrow morning.", "timestamp": 1012.0, "state": "confirm"},
     ]
     return s
 
@@ -41,9 +43,9 @@ def safety_session():
     s.state = State.SAFETY_EXIT
     s.customer_name = "Maria"
     s.transcript_log = [
-        {"role": "agent", "content": "Any safety concerns?", "timestamp": 2000.0},
-        {"role": "user", "content": "I smell gas in my house", "timestamp": 2002.0},
-        {"role": "agent", "content": "Please call 911 immediately.", "timestamp": 2003.0},
+        {"role": "agent", "content": "Any safety concerns?", "timestamp": 2000.0, "state": "safety"},
+        {"role": "user", "content": "I smell gas in my house", "timestamp": 2002.0, "state": "safety"},
+        {"role": "agent", "content": "Please call 911 immediately.", "timestamp": 2003.0, "state": "safety_exit"},
     ]
     return s
 
@@ -281,3 +283,110 @@ class TestDatetimeGuards:
         payload = build_call_payload(s, end_time=0.0, user_email="o@t.com")
         assert payload["ended_at"] != ""
         assert "T" in payload["ended_at"]
+
+
+class TestChunkTranscriptDump:
+    def test_small_transcript_single_chunk(self):
+        dump = {
+            "call_sid": "CA_test",
+            "phone": "+15125551234",
+            "final_state": "done",
+            "entries": [
+                {"t": 0.0, "role": "agent", "state": "welcome", "content": "Hello."},
+            ],
+        }
+        chunks = chunk_transcript_dump(dump, max_bytes=3500)
+        assert len(chunks) == 1
+        assert chunks[0].startswith("TRANSCRIPT_DUMP|1/1|")
+        payload = json.loads(chunks[0].split("|", 2)[2])
+        assert payload["call_sid"] == "CA_test"
+        assert len(payload["entries"]) == 1
+
+    def test_large_transcript_multiple_chunks(self):
+        entries = [
+            {"t": float(i), "role": "user", "state": "discovery", "content": f"Message number {i} with some padding text to take up space."}
+            for i in range(50)
+        ]
+        dump = {
+            "call_sid": "CA_big",
+            "phone": "+15125551234",
+            "final_state": "done",
+            "entries": entries,
+        }
+        chunks = chunk_transcript_dump(dump, max_bytes=1000)
+        assert len(chunks) > 1
+        # Verify numbering
+        for i, chunk in enumerate(chunks, 1):
+            prefix = chunk.split("|", 2)
+            assert prefix[0] == "TRANSCRIPT_DUMP"
+            assert prefix[1] == f"{i}/{len(chunks)}"
+        # Verify all entries are present when reassembled
+        all_entries = []
+        for chunk in chunks:
+            payload = json.loads(chunk.split("|", 2)[2])
+            all_entries.extend(payload.get("entries", []))
+        assert len(all_entries) == 50
+
+    def test_chunks_never_split_mid_entry(self):
+        entries = [
+            {"t": float(i), "role": "agent", "state": "welcome", "content": "A" * 200}
+            for i in range(20)
+        ]
+        dump = {
+            "call_sid": "CA_mid",
+            "phone": "+1",
+            "final_state": "done",
+            "entries": entries,
+        }
+        chunks = chunk_transcript_dump(dump, max_bytes=1000)
+        for chunk in chunks:
+            payload = json.loads(chunk.split("|", 2)[2])
+            # Each chunk's JSON must be valid (not truncated)
+            assert isinstance(payload, dict)
+            for entry in payload.get("entries", []):
+                assert "t" in entry
+                assert "role" in entry
+
+    def test_first_chunk_has_header_fields(self):
+        dump = {
+            "call_sid": "CA_hdr",
+            "phone": "+15125559876",
+            "final_state": "booking_failed",
+            "entries": [
+                {"t": float(i), "role": "user", "state": "discovery", "content": "X" * 300}
+                for i in range(20)
+            ],
+        }
+        chunks = chunk_transcript_dump(dump, max_bytes=1000)
+        first = json.loads(chunks[0].split("|", 2)[2])
+        assert first["call_sid"] == "CA_hdr"
+        assert first["phone"] == "+15125559876"
+        assert first["final_state"] == "booking_failed"
+
+
+class TestTranscriptDumpEmission:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_handle_call_ended_emits_transcript_dump(self, completed_session, monkeypatch, caplog):
+        monkeypatch.setenv("DASHBOARD_JOBS_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_CALLS_URL", "https://app.example.com/api/webhook/calls")
+        monkeypatch.setenv("DASHBOARD_ALERTS_URL", "https://app.example.com/api/webhook/emergency-alerts")
+        monkeypatch.setenv("DASHBOARD_WEBHOOK_SECRET", "test-secret")
+        monkeypatch.setenv("DASHBOARD_USER_EMAIL", "owner@test.com")
+
+        respx.post("https://app.example.com/api/webhook/jobs").mock(
+            return_value=httpx.Response(200, json={"success": True})
+        )
+        respx.post("https://app.example.com/api/webhook/calls").mock(
+            return_value=httpx.Response(200, json={"success": True})
+        )
+
+        with caplog.at_level(logging.INFO, logger="calllock.post_call"):
+            await handle_call_ended(completed_session)
+
+        dump_lines = [r.message for r in caplog.records if "TRANSCRIPT_DUMP|" in r.message]
+        assert len(dump_lines) >= 1, "Expected at least one TRANSCRIPT_DUMP log line"
+        # Parse the first chunk
+        payload = json.loads(dump_lines[0].split("|", 2)[2])
+        assert payload["call_sid"] == "CA_test_123"
+        assert len(payload["entries"]) > 0

@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import logging
@@ -5,7 +6,7 @@ from datetime import datetime, timezone
 
 from calllock.session import CallSession
 from calllock.states import State
-from calllock.transcript import to_plain_text, to_json_array
+from calllock.transcript import to_plain_text, to_json_array, to_timestamped_dump
 from calllock.classification import classify_tags, detect_priority, estimate_revenue_tier
 from calllock.dashboard_sync import DashboardClient
 
@@ -128,6 +129,54 @@ def build_call_payload(session: CallSession, end_time: float, user_email: str) -
     }
 
 
+def chunk_transcript_dump(dump: dict, max_bytes: int = 3500) -> list[str]:
+    """Split a transcript dump into chunks that fit within log line limits.
+
+    Each chunk is a string: TRANSCRIPT_DUMP|N/M|{json}
+    The first chunk contains header fields + as many entries as fit.
+    Subsequent chunks contain only entries.
+    """
+    header = {k: v for k, v in dump.items() if k != "entries"}
+    entries = dump.get("entries", [])
+
+    if not entries:
+        payload = json.dumps({**header, "entries": []})
+        return [f"TRANSCRIPT_DUMP|1/1|{payload}"]
+
+    chunks_entries: list[list[dict]] = []
+    current_chunk: list[dict] = []
+    # Reserve space for header in first chunk
+    current_size = len(json.dumps({**header, "entries": []}).encode("utf-8"))
+    is_first = True
+
+    for entry in entries:
+        entry_json = json.dumps(entry)
+        entry_size = len(entry_json.encode("utf-8")) + 2  # comma + bracket overhead
+
+        if current_chunk and (current_size + entry_size) > max_bytes:
+            chunks_entries.append(current_chunk)
+            current_chunk = []
+            current_size = len(json.dumps({"entries": []}).encode("utf-8"))
+            is_first = False
+
+        current_chunk.append(entry)
+        current_size += entry_size
+
+    if current_chunk:
+        chunks_entries.append(current_chunk)
+
+    total = len(chunks_entries)
+    result = []
+    for i, chunk_entries in enumerate(chunks_entries):
+        if i == 0:
+            payload = json.dumps({**header, "entries": chunk_entries})
+        else:
+            payload = json.dumps({"entries": chunk_entries})
+        result.append(f"TRANSCRIPT_DUMP|{i + 1}/{total}|{payload}")
+
+    return result
+
+
 async def handle_call_ended(session: CallSession):
     """Post-call orchestrator. Called after the pipeline finishes."""
     jobs_url = os.getenv("DASHBOARD_JOBS_URL", "")
@@ -172,5 +221,18 @@ async def handle_call_ended(session: CallSession):
         }
         alert_result = await dashboard.send_emergency_alert(alert_payload)
         logger.info(f"Dashboard emergency alert: {alert_result}")
+
+    # 4. Emit structured transcript dump for CLI retrieval
+    end_duration = round(end_time - session.start_time, 1) if session.start_time > 0 else 0
+    dump = to_timestamped_dump(
+        session.transcript_log,
+        start_time=session.start_time,
+        call_sid=session.call_sid,
+        phone=session.phone_number,
+        final_state=session.state.value,
+    )
+    dump["duration_s"] = end_duration
+    for line in chunk_transcript_dump(dump):
+        logger.info(line)
 
     logger.info(f"Post-call complete for {session.call_sid}: state={session.state.value}, booking={session.booking_confirmed}")
