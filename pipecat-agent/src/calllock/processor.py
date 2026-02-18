@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import time as _time
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.frames.frames import (
@@ -102,6 +103,8 @@ class StateMachineProcessor(FrameProcessor):
         self._capture_agent_responses()
 
     async def _handle_transcription(self, frame: TranscriptionFrame):
+        t_start = time.time()
+
         # Capture any agent responses from previous turn
         self._capture_agent_responses()
 
@@ -125,9 +128,13 @@ class StateMachineProcessor(FrameProcessor):
         if action.speak:
             await self.push_frame(TTSSpeakFrame(text=action.speak), FrameDirection.DOWNSTREAM)
 
-        # Handle tool calls
+        # Handle tool calls — track state change to force LLM if state transitions
+        force_llm = False
         if action.call_tool:
+            state_before = self.session.state
             await self._execute_tool(action)
+            if self.session.state != state_before:
+                force_llm = True
 
         # Update system prompt for current state
         self.context.messages[0]["content"] = get_system_prompt(self.session)
@@ -138,7 +145,7 @@ class StateMachineProcessor(FrameProcessor):
 
         # End the call if needed
         if action.end_call:
-            if action.needs_llm:
+            if action.needs_llm or force_llm:
                 # Let LLM generate a farewell, then end after TTS finishes
                 await self.push_frame(frame, FrameDirection.DOWNSTREAM)
                 asyncio.create_task(self._delayed_end_call(delay=3.0))
@@ -147,7 +154,12 @@ class StateMachineProcessor(FrameProcessor):
             return
 
         # Pass transcription downstream if LLM should generate response
-        if action.needs_llm:
+        if action.needs_llm or force_llm:
+            t_push = time.time()
+            logger.info(
+                f"[{self.session.state.value}] Processing: {(t_push - t_start)*1000:.0f}ms "
+                f"(transcription→LLM push, force_llm={force_llm})"
+            )
             await self.push_frame(frame, FrameDirection.DOWNSTREAM)
         else:
             # Preserve user text in LLM context even when LLM won't respond.

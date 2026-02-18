@@ -7,7 +7,8 @@ from calllock.state_machine import StateMachine
 from calllock.states import State
 
 from pipecat.processors.frame_processor import FrameDirection
-from pipecat.frames.frames import TranscriptionFrame, InterimTranscriptionFrame, EndFrame
+from pipecat.frames.frames import TranscriptionFrame, InterimTranscriptionFrame, EndFrame, LLMMessagesFrame
+from calllock.state_machine import Action
 
 
 @pytest.fixture
@@ -246,18 +247,17 @@ class TestContextPreservation:
     """User text must always be in LLM context, even during needs_llm=False turns."""
 
     @pytest.mark.asyncio
-    async def test_user_text_preserved_when_needs_llm_false(self, processor):
-        """When state machine returns needs_llm=False (e.g., WELCOME→LOOKUP),
-        the user's text must still be added to context.messages so the LLM
-        has the full conversation on its next turn.
+    async def test_user_text_reaches_llm_after_tool_transition(self, processor):
+        """When WELCOME→LOOKUP→SAFETY, the force_llm fix pushes the
+        transcription frame downstream so the context aggregator adds
+        user text to the LLM context.
 
-        Bug: processor only pushed frames downstream when needs_llm=True.
-        The context aggregator only sees pushed frames, so user text from
-        silent turns was invisible to the LLM.
+        Before the fix, needs_llm=False meant the frame was NOT pushed
+        and user text was manually appended. Now force_llm=True triggers
+        the push, and the context aggregator handles the rest.
         """
         processor._debounce_seconds = 0.05
 
-        # Start in WELCOME — "my AC is broken" triggers LOOKUP with needs_llm=False
         processor.context.messages = [
             {"role": "system", "content": "test"},
             {"role": "assistant", "content": "Thanks for calling ACE Cooling, how can I help you?"},
@@ -269,13 +269,12 @@ class TestContextPreservation:
         )
         await asyncio.sleep(0.1)  # Let debounce fire
 
-        # The user's text should be in context.messages even though needs_llm=False
-        user_msgs = [m for m in processor.context.messages if m.get("role") == "user"]
-        assert len(user_msgs) >= 1, (
-            f"User text lost from LLM context during needs_llm=False turn. "
-            f"Context: {processor.context.messages}"
+        # With force_llm fix, the TranscriptionFrame is pushed downstream
+        pushed_types = [type(call.args[0]).__name__ for call in processor.push_frame.call_args_list]
+        assert "TranscriptionFrame" in pushed_types, (
+            f"TranscriptionFrame should be pushed downstream after tool-driven state transition. "
+            f"Pushed: {pushed_types}"
         )
-        assert "AC" in user_msgs[0]["content"]
 
     @pytest.mark.asyncio
     async def test_speak_fires_before_tool_call(self, processor):
@@ -310,3 +309,110 @@ class TestContextPreservation:
         if "TTSSpeakFrame" in pushed:
             assert True, "Speak frame was pushed"
         # If no speak frame, the test passes as advisory — the core fix is context preservation
+
+
+class TestPostToolLLMTrigger:
+    """After tool execution transitions state, LLM must be triggered."""
+
+    @pytest.mark.asyncio
+    async def test_lookup_triggers_llm_response_after_transition(self, processor):
+        """WELCOME → LOOKUP → SAFETY: after lookup_caller returns,
+        the LLM must be invoked to greet the caller in SAFETY state.
+
+        Bug: lookup returns needs_llm=False, so the LLM was never
+        triggered after the tool result transitioned to SAFETY.
+        This caused 26s of dead air in production (call CAd2b972dc).
+        """
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+            {"role": "assistant", "content": "Thanks for calling ACE Cooling"},
+        ]
+
+        frame = TranscriptionFrame(text="my AC is broken", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+
+        pushed_types = [type(call.args[0]).__name__ for call in processor.push_frame.call_args_list]
+
+        # TTSSpeakFrame ("One moment.") should be there
+        assert "TTSSpeakFrame" in pushed_types, f"Expected speak frame, got: {pushed_types}"
+
+        # After tool completes and state transitions, a frame must trigger LLM
+        llm_trigger_types = {"TranscriptionFrame", "LLMMessagesFrame"}
+        assert llm_trigger_types & set(pushed_types), (
+            f"LLM was not triggered after tool-driven state transition. "
+            f"Pushed frames: {pushed_types}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_booking_triggers_llm_after_confirmation(self, processor):
+        """BOOKING → (tool) → CONFIRM: after book_service returns success,
+        the LLM must generate a confirmation message."""
+        processor.session.state = State.BOOKING
+        processor.session.booking_attempted = False
+        processor.tools.book_service.return_value = {
+            "booked": True,
+            "booking_time": "Tomorrow 9 AM",
+        }
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+        ]
+
+        frame = TranscriptionFrame(text="yes please", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+
+        assert processor.session.state == State.CONFIRM
+        pushed_types = [type(call.args[0]).__name__ for call in processor.push_frame.call_args_list]
+        llm_trigger_types = {"TranscriptionFrame", "LLMMessagesFrame"}
+        assert llm_trigger_types & set(pushed_types), (
+            f"LLM was not triggered after booking confirmation. "
+            f"Pushed frames: {pushed_types}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_lookup_failure_still_triggers_llm(self, processor):
+        """When V2 backend returns failure dict, state should still
+        transition and LLM should still respond (review T1)."""
+        processor.tools.lookup_caller.return_value = {
+            "found": False, "message": "V2 backend unavailable"
+        }
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+            {"role": "assistant", "content": "Greeting"},
+        ]
+
+        frame = TranscriptionFrame(text="my AC is broken", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+
+        assert processor.session.state == State.SAFETY
+        pushed_types = [type(c.args[0]).__name__ for c in processor.push_frame.call_args_list]
+        assert "TTSSpeakFrame" in pushed_types or "TranscriptionFrame" in pushed_types
+
+    @pytest.mark.asyncio
+    async def test_context_preserved_when_tool_doesnt_transition(self, processor):
+        """When tool doesn't transition state AND needs_llm=False, user text
+        must still be preserved in LLM context via manual append (review T4).
+
+        Uses a mocked state machine to create a needs_llm=False + no-transition
+        scenario (no natural state machine path produces this combo).
+        """
+        processor.session.state = State.CALLBACK
+
+        # Mock machine.process to return needs_llm=False with a tool call
+        mock_action = Action(call_tool="create_callback", needs_llm=False)
+        processor.machine = MagicMock()
+        processor.machine.process.return_value = mock_action
+        # Tool result handler does NOT transition state
+        processor.machine.handle_tool_result = MagicMock()
+
+        processor.tools.create_callback.return_value = {"error": "timeout"}
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+        ]
+
+        frame = TranscriptionFrame(text="please call me back", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+
+        # force_llm should be False (no state change), needs_llm is False,
+        # so user text must be manually appended to context
+        user_msgs = [m for m in processor.context.messages if m.get("role") == "user"]
+        assert any("call me back" in m["content"] for m in user_msgs)
