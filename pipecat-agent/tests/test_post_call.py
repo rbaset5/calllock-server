@@ -13,7 +13,7 @@ def completed_session():
     s = CallSession(phone_number="+15125551234")
     s.call_sid = "CA_test_123"
     s.start_time = 1000.0
-    s.state = State.DONE
+    s.state = State.CONFIRM
     s.caller_known = True
     s.customer_name = "Jonas"
     s.zip_code = "78745"

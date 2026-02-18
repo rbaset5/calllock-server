@@ -31,7 +31,7 @@ def _derive_end_call_reason(session: CallSession) -> str:
     """Map final session state to an end_call_reason string."""
     if session.state == State.SAFETY_EXIT:
         return "safety_emergency"
-    if session.state == State.DONE and session.booking_confirmed:
+    if session.state == State.CONFIRM and session.booking_confirmed:
         return "completed"
     if session.state == State.CALLBACK:
         if session.lead_type == "high_ticket":

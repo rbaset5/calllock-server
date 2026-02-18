@@ -72,7 +72,7 @@ class TestClassifyTags:
 
     def test_booking_confirmed_produces_service_type(self):
         session = CallSession(phone_number="+15125551234")
-        session.state = State.DONE
+        session.state = State.CONFIRM
         session.booking_confirmed = True
         session.problem_description = "heating not working"
         tags = classify_tags(session, "")

@@ -133,7 +133,7 @@ class StateMachineProcessor(FrameProcessor):
         self.context.messages[0]["content"] = get_system_prompt(self.session)
 
         # Run extraction in background — results only matter for the next turn
-        if self.session.state.value in ("service_area", "discovery", "confirm"):
+        if self.session.state.value in ("service_area", "discovery", "urgency", "pre_confirm"):
             asyncio.create_task(self._safe_extraction())
 
         # End the call if needed
@@ -180,8 +180,18 @@ class StateMachineProcessor(FrameProcessor):
         elif tool == "create_callback":
             result = await self.tools.create_callback(
                 phone=self.session.phone_number,
-                callback_type=self.session.lead_type or "service",
-                reason=self.session.problem_description,
+                callback_type=self.session.callback_type or self.session.lead_type or "service",
+                reason=self.session.problem_description or "Callback requested",
+                customer_name=self.session.customer_name,
+                urgency="urgent" if self.session.urgency_tier == "urgent" else "normal",
+            )
+        elif tool == "manage_appointment":
+            result = await self.tools.manage_appointment(
+                action=action.tool_args.get("action", "status"),
+                phone=self.session.phone_number,
+                booking_uid=self.session.appointment_uid,
+                reason=action.tool_args.get("reason", ""),
+                new_time=action.tool_args.get("new_time", ""),
             )
         elif tool == "send_sales_lead_alert":
             result = await self.tools.send_sales_lead_alert(
@@ -241,3 +251,13 @@ class StateMachineProcessor(FrameProcessor):
             time = extracted.get("preferred_time", "")
             if time:
                 self.session.preferred_time = time
+
+        if not self.session.equipment_type:
+            equip = extracted.get("equipment_type", "")
+            if equip:
+                self.session.equipment_type = equip
+
+        if not self.session.problem_duration:
+            dur = extracted.get("problem_duration", "")
+            if dur:
+                self.session.problem_duration = dur

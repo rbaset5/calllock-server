@@ -161,7 +161,7 @@ class TestEndCallAfterLLM:
         processor._debounce_seconds = 0.05
 
         # Put session in DONE state — triggers end_call=True, needs_llm=True
-        processor.session.state = State.DONE
+        processor.session.state = State.CONFIRM
 
         frame = TranscriptionFrame(text="Thanks bye", user_id="", timestamp="")
         await processor.process_frame(frame, FrameDirection.DOWNSTREAM)

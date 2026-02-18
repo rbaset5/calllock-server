@@ -90,8 +90,11 @@ class V2Client:
     async def create_callback(
         self,
         phone: str,
+        call_id: str = "pipecat_call",
         callback_type: str = "service",
         reason: str = "",
+        customer_name: str = "",
+        urgency: str = "normal",
     ) -> dict:
         if not self._circuit.should_try():
             logger.warning("V2 circuit breaker open — returning callback failure")
@@ -101,10 +104,16 @@ class V2Client:
                 resp = await client.post(
                     f"{self.base_url}/webhook/retell/create_callback",
                     json={
-                        "call": {"from_number": phone, "metadata": {}},
+                        "call": {
+                            "call_id": call_id,
+                            "from_number": phone,
+                            "metadata": {},
+                        },
                         "args": {
+                            "reason": reason or "Callback requested",
                             "callback_type": callback_type,
-                            "execution_message": reason,
+                            "customer_name": customer_name,
+                            "urgency": urgency,
                         },
                     },
                 )
@@ -135,4 +144,45 @@ class V2Client:
         except Exception as e:
             self._circuit.record_failure()
             logger.error("send_sales_lead_alert failed: %s", e)
+            return {"success": False, "error": str(e)}
+
+    async def manage_appointment(
+        self,
+        action: str,
+        phone: str,
+        call_id: str = "pipecat_call",
+        booking_uid: str = "",
+        reason: str = "",
+        new_time: str = "",
+    ) -> dict:
+        if not self._circuit.should_try():
+            logger.warning("V2 circuit breaker open — returning appointment failure")
+            return {"success": False, "error": "V2 backend unavailable"}
+        try:
+            args = {"action": action}
+            if booking_uid:
+                args["booking_uid"] = booking_uid
+            if reason:
+                args["reason"] = reason
+            if new_time:
+                args["new_date_time"] = new_time
+
+            async with httpx.AsyncClient(timeout=self.timeout, headers=self._headers()) as client:
+                resp = await client.post(
+                    f"{self.base_url}/webhook/retell/manage_appointment",
+                    json={
+                        "call": {
+                            "call_id": call_id,
+                            "from_number": phone,
+                            "metadata": {},
+                        },
+                        "args": args,
+                    },
+                )
+                resp.raise_for_status()
+                self._circuit.record_success()
+                return resp.json()
+        except Exception as e:
+            self._circuit.record_failure()
+            logger.error("manage_appointment failed: %s", e)
             return {"success": False, "error": str(e)}

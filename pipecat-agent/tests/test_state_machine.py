@@ -21,17 +21,41 @@ class TestWelcomeState:
         action = sm.process(session, "my AC is broken")
         assert session.state == State.LOOKUP
 
-    def test_billing_intent_routes_to_callback(self, sm, session):
+    def test_billing_intent_routes_to_non_service(self, sm, session):
         action = sm.process(session, "I have a billing question")
-        assert session.state == State.CALLBACK
+        assert session.state == State.NON_SERVICE
 
-    def test_vendor_intent_routes_to_callback(self, sm, session):
+    def test_vendor_intent_routes_to_non_service(self, sm, session):
         action = sm.process(session, "I'm a parts supplier")
-        assert session.state == State.CALLBACK
+        assert session.state == State.NON_SERVICE
 
     def test_ambiguous_defaults_to_lookup(self, sm, session):
         action = sm.process(session, "hello")
         assert session.state == State.LOOKUP
+
+    def test_follow_up_intent_routes_to_lookup(self, sm, session):
+        action = sm.process(session, "I'm following up on a previous call")
+        assert session.state == State.LOOKUP
+        assert session.caller_intent == "follow_up"
+
+    def test_manage_booking_intent_routes_to_lookup(self, sm, session):
+        action = sm.process(session, "I need to reschedule my appointment")
+        assert session.state == State.LOOKUP
+        assert session.caller_intent == "manage_booking"
+
+
+# --- NON_SERVICE state ---
+
+class TestNonServiceState:
+    def test_stays_in_non_service_by_default(self, sm, session):
+        session.state = State.NON_SERVICE
+        action = sm.process(session, "when can I get a call back about my bill?")
+        assert session.state == State.NON_SERVICE
+
+    def test_schedule_request_routes_to_safety(self, sm, session):
+        session.state = State.NON_SERVICE
+        action = sm.process(session, "yes I'd like to schedule a visit")
+        assert session.state == State.SAFETY
 
 
 # --- LOOKUP state ---
@@ -48,16 +72,69 @@ class TestLookupState:
             "found": True,
             "customerName": "Jonas",
             "zipCode": "78745",
+            "address": "4210 South Lamar Blvd",
         })
         assert session.caller_known is True
         assert session.customer_name == "Jonas"
         assert session.zip_code == "78745"
+        assert session.service_address == "4210 South Lamar Blvd"
         assert session.state == State.SAFETY
 
     def test_unknown_caller_still_routes_to_safety(self, sm, session):
         session.state = State.LOOKUP
         sm.handle_tool_result(session, "lookup_caller", {"found": False})
         assert session.caller_known is False
+        assert session.state == State.SAFETY
+
+    def test_follow_up_intent_routes_to_follow_up(self, sm, session):
+        session.state = State.LOOKUP
+        session.caller_intent = "follow_up"
+        sm.handle_tool_result(session, "lookup_caller", {"found": True, "customerName": "Jonas"})
+        assert session.state == State.FOLLOW_UP
+
+    def test_manage_booking_intent_routes_to_manage_booking(self, sm, session):
+        session.state = State.LOOKUP
+        session.caller_intent = "manage_booking"
+        sm.handle_tool_result(session, "lookup_caller", {
+            "found": True,
+            "customerName": "Jonas",
+            "upcomingAppointment": {"date": "2026-02-20", "time": "10:00 AM", "uid": "abc123"},
+        })
+        assert session.state == State.MANAGE_BOOKING
+        assert session.has_appointment is True
+        assert session.appointment_uid == "abc123"
+
+
+# --- FOLLOW_UP state ---
+
+class TestFollowUpState:
+    def test_new_issue_routes_to_safety(self, sm, session):
+        session.state = State.FOLLOW_UP
+        action = sm.process(session, "I also have a new issue")
+        assert session.state == State.SAFETY
+
+    def test_schedule_routes_to_safety(self, sm, session):
+        session.state = State.FOLLOW_UP
+        action = sm.process(session, "I want to book an appointment")
+        assert session.state == State.SAFETY
+
+    def test_stays_by_default(self, sm, session):
+        session.state = State.FOLLOW_UP
+        action = sm.process(session, "just checking in")
+        assert session.state == State.FOLLOW_UP
+
+
+# --- MANAGE_BOOKING state ---
+
+class TestManageBookingState:
+    def test_stays_for_reschedule_discussion(self, sm, session):
+        session.state = State.MANAGE_BOOKING
+        action = sm.process(session, "can I move it to Friday?")
+        assert session.state == State.MANAGE_BOOKING
+
+    def test_new_issue_routes_to_safety(self, sm, session):
+        session.state = State.MANAGE_BOOKING
+        action = sm.process(session, "I have a different problem")
         assert session.state == State.SAFETY
 
 
@@ -79,25 +156,11 @@ class TestSafetyState:
         action = sm.process(session, "what do you mean")
         assert session.state == State.SAFETY
 
-
-# --- Existing appointment routing ---
-
-class TestExistingAppointmentRouting:
-    def test_has_appointment_routes_to_callback_after_safety(self, sm, session):
-        """When lookup found an existing appointment and safety is clear,
-        skip SERVICE_AREA and go straight to CALLBACK."""
+    def test_retracted_emergency_stays_in_safety(self, sm, session):
+        """Safety retraction: 'gas heater but never mind' should NOT trigger emergency."""
         session.state = State.SAFETY
-        session.has_appointment = True
-        action = sm.process(session, "no nothing like that")
-        assert session.state == State.CALLBACK
-        assert session.state_turn_count == 0
-
-    def test_no_appointment_still_routes_to_service_area(self, sm, session):
-        """Without an existing appointment, safety-clear still goes to SERVICE_AREA."""
-        session.state = State.SAFETY
-        session.has_appointment = False
-        action = sm.process(session, "no")
-        assert session.state == State.SERVICE_AREA
+        action = sm.process(session, "gas heater but never mind")
+        assert session.state != State.SAFETY_EXIT
 
 
 # --- SAFETY_EXIT state ---
@@ -175,13 +238,13 @@ class TestWordsToDigits:
 # --- DISCOVERY state ---
 
 class TestDiscoveryState:
-    def test_all_fields_routes_to_confirm(self, sm, session):
+    def test_all_fields_routes_to_urgency(self, sm, session):
         session.state = State.DISCOVERY
         session.customer_name = "Jonas"
         session.problem_description = "AC blowing warm air"
         session.service_address = "4210 South Lamar Blvd"
         action = sm.process(session, "")
-        assert session.state == State.CONFIRM
+        assert session.state == State.URGENCY
 
     def test_missing_name_stays(self, sm, session):
         session.state = State.DISCOVERY
@@ -199,28 +262,80 @@ class TestDiscoveryState:
         assert session.customer_name == ""
         assert session.state == State.DISCOVERY
 
+    def test_high_ticket_detected_in_discovery(self, sm, session):
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "I want a new system upgrade"
+        session.service_address = "123 Main St"
+        action = sm.process(session, "")
+        assert session.lead_type == "high_ticket"
+        assert session.state == State.URGENCY
 
-# --- CONFIRM state ---
+    def test_garbled_address_rejected(self, sm, session):
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC broken"
+        session.service_address = "123 Main or 456 Oak"
+        action = sm.process(session, "")
+        assert session.service_address == ""
+        assert session.state == State.DISCOVERY
 
-class TestConfirmState:
+
+# --- URGENCY state ---
+
+class TestUrgencyState:
+    def test_urgent_timing_routes_to_pre_confirm(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "I need someone today, ASAP")
+        assert session.urgency_tier == "urgent"
+        assert session.state == State.PRE_CONFIRM
+
+    def test_routine_timing_routes_to_pre_confirm(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "whenever this week works")
+        assert session.urgency_tier == "routine"
+        assert session.state == State.PRE_CONFIRM
+
+    def test_specific_day_routes_to_pre_confirm(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "how about tomorrow morning?")
+        assert session.state == State.PRE_CONFIRM
+
+    def test_callback_request_routes_to_urgency_callback(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "just have someone call me back")
+        assert session.state == State.URGENCY_CALLBACK
+
+    def test_high_ticket_routes_to_urgency_callback(self, sm, session):
+        session.state = State.URGENCY
+        session.lead_type = "high_ticket"
+        action = sm.process(session, "whenever works")
+        assert session.state == State.URGENCY_CALLBACK
+
+    def test_unclear_stays(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "I'm not sure")
+        assert session.state == State.URGENCY
+
+
+# --- PRE_CONFIRM state ---
+
+class TestPreConfirmState:
     def test_yes_routes_to_booking(self, sm, session):
-        session.state = State.CONFIRM
-        session.caller_confirmed = True
-        action = sm.process(session, "yes that sounds right, schedule me")
+        session.state = State.PRE_CONFIRM
+        action = sm.process(session, "yes that sounds right")
+        assert session.caller_confirmed is True
         assert session.state == State.BOOKING
 
     def test_callback_request_routes_to_callback(self, sm, session):
-        session.state = State.CONFIRM
+        session.state = State.PRE_CONFIRM
         action = sm.process(session, "just have someone call me back")
         assert session.state == State.CALLBACK
 
-    def test_high_ticket_routes_to_callback(self, sm, session):
-        session.state = State.CONFIRM
-        session.lead_type = "high_ticket"
-        session.caller_confirmed = True
-        action = sm.process(session, "yes I want a new system")
-        assert session.state == State.CALLBACK
-        assert action.call_tool == "send_sales_lead_alert"
+    def test_stays_for_correction(self, sm, session):
+        session.state = State.PRE_CONFIRM
+        action = sm.process(session, "actually the address is different")
+        assert session.state == State.PRE_CONFIRM
 
 
 # --- BOOKING state ---
@@ -231,20 +346,20 @@ class TestBookingState:
         action = sm.process(session, "")
         assert action.call_tool == "book_service"
 
-    def test_booking_success_routes_to_done(self, sm, session):
+    def test_booking_success_routes_to_confirm(self, sm, session):
         session.state = State.BOOKING
         sm.handle_tool_result(session, "book_service", {
             "booked": True,
             "booking_time": "2026-02-15T10:00:00",
         })
         assert session.booking_confirmed is True
-        assert session.state == State.DONE
+        assert session.state == State.CONFIRM
 
-    def test_booking_failure_routes_to_callback(self, sm, session):
+    def test_booking_failure_routes_to_booking_failed(self, sm, session):
         session.state = State.BOOKING
         sm.handle_tool_result(session, "book_service", {"booked": False})
         assert session.booking_confirmed is False
-        assert session.state == State.CALLBACK
+        assert session.state == State.BOOKING_FAILED
 
     def test_booking_has_no_end_call(self, sm, session):
         """The critical structural guarantee: booking cannot end a call."""
@@ -253,11 +368,26 @@ class TestBookingState:
         assert action.end_call is False
 
 
-# --- DONE state ---
+# --- BOOKING_FAILED state ---
 
-class TestDoneState:
+class TestBookingFailedState:
+    def test_creates_callback(self, sm, session):
+        session.state = State.BOOKING_FAILED
+        action = sm.process(session, "")
+        assert action.call_tool == "create_callback"
+
+    def test_ends_call_after_callback(self, sm, session):
+        session.state = State.BOOKING_FAILED
+        session.callback_created = True
+        action = sm.process(session, "")
+        assert action.end_call is True
+
+
+# --- CONFIRM state (terminal after booking success) ---
+
+class TestConfirmState:
     def test_ends_call(self, sm, session):
-        session.state = State.DONE
+        session.state = State.CONFIRM
         action = sm.process(session, "")
         assert action.end_call is True
 
@@ -345,11 +475,11 @@ class TestCallbackRetryLimit:
 
 class TestStructuralGuarantees:
     def test_no_backward_transitions(self, sm, session):
-        """States can only move forward in the flow."""
+        """States can only move forward in the main flow."""
         forward_order = [
             State.WELCOME, State.LOOKUP, State.SAFETY,
-            State.SERVICE_AREA, State.DISCOVERY, State.CONFIRM,
-            State.BOOKING, State.DONE,
+            State.SERVICE_AREA, State.DISCOVERY, State.URGENCY,
+            State.PRE_CONFIRM, State.BOOKING, State.CONFIRM,
         ]
         for i, state in enumerate(forward_order[:-1]):
             valid_nexts = sm.valid_transitions(state)
@@ -358,7 +488,7 @@ class TestStructuralGuarantees:
                     f"{state.value} should not transition back to {prev_state.value}"
 
     def test_decision_states_have_no_tools(self, sm):
-        for state in [State.WELCOME, State.SAFETY, State.DISCOVERY, State.CONFIRM]:
+        for state in [State.WELCOME, State.SAFETY, State.DISCOVERY, State.URGENCY, State.PRE_CONFIRM]:
             assert sm.available_tools(state) == [], \
                 f"Decision state {state.value} should have no tools"
 
@@ -377,10 +507,10 @@ class TestStateTurnCountReset:
         assert session.state == State.LOOKUP
         assert session.state_turn_count == 0
 
-    def test_welcome_to_callback_resets(self, sm, session):
+    def test_welcome_to_non_service_resets(self, sm, session):
         session.state_turn_count = 3
         sm.process(session, "I have a billing question")
-        assert session.state == State.CALLBACK
+        assert session.state == State.NON_SERVICE
         assert session.state_turn_count == 0
 
     def test_safety_to_service_area_resets(self, sm, session):
@@ -397,25 +527,25 @@ class TestStateTurnCountReset:
         assert session.state == State.SAFETY_EXIT
         assert session.state_turn_count == 0
 
-    def test_discovery_to_confirm_resets(self, sm, session):
+    def test_discovery_to_urgency_resets(self, sm, session):
         session.state = State.DISCOVERY
         session.state_turn_count = 4
         session.customer_name = "Jonas"
         session.problem_description = "AC broken"
         session.service_address = "123 Main St"
         sm.process(session, "")
-        assert session.state == State.CONFIRM
+        assert session.state == State.URGENCY
         assert session.state_turn_count == 0
 
-    def test_confirm_to_booking_resets(self, sm, session):
-        session.state = State.CONFIRM
+    def test_pre_confirm_to_booking_resets(self, sm, session):
+        session.state = State.PRE_CONFIRM
         session.state_turn_count = 3
-        sm.process(session, "yes schedule me")
+        sm.process(session, "yes go ahead")
         assert session.state == State.BOOKING
         assert session.state_turn_count == 0
 
-    def test_confirm_to_callback_resets(self, sm, session):
-        session.state = State.CONFIRM
+    def test_pre_confirm_to_callback_resets(self, sm, session):
+        session.state = State.PRE_CONFIRM
         session.state_turn_count = 3
         sm.process(session, "just have someone call me back")
         assert session.state == State.CALLBACK
