@@ -321,11 +321,23 @@ class TestUrgencyState:
 # --- PRE_CONFIRM state ---
 
 class TestPreConfirmState:
-    def test_yes_routes_to_booking(self, sm, session):
+    def test_yes_fires_booking_immediately(self, sm, session):
+        """Regression: pre_confirm "yes" must fire book_service in the same turn.
+
+        Without this, the agent says "Let me check..." but does nothing until
+        the caller speaks again — causing 30+ seconds of dead air.
+        """
         session.state = State.PRE_CONFIRM
+        session.customer_name = "Jonas"
+        session.problem_description = "AC not cooling"
+        session.service_address = "5211 Cronkite Road"
+        session.preferred_time = "soonest available"
         action = sm.process(session, "yes that sounds right")
         assert session.caller_confirmed is True
         assert session.state == State.BOOKING
+        assert action.call_tool == "book_service", "book_service must fire on the same turn as 'yes'"
+        assert session.booking_attempted is True
+        assert action.speak  # Should have a filler line for the caller
 
     def test_callback_request_routes_to_callback(self, sm, session):
         session.state = State.PRE_CONFIRM
@@ -540,9 +552,10 @@ class TestStateTurnCountReset:
     def test_pre_confirm_to_booking_resets(self, sm, session):
         session.state = State.PRE_CONFIRM
         session.state_turn_count = 3
-        sm.process(session, "yes go ahead")
+        action = sm.process(session, "yes go ahead")
         assert session.state == State.BOOKING
         assert session.state_turn_count == 0
+        assert action.call_tool == "book_service"
 
     def test_pre_confirm_to_callback_resets(self, sm, session):
         session.state = State.PRE_CONFIRM

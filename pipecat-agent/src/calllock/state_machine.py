@@ -290,13 +290,21 @@ class StateMachine:
                        "correct", "that's right", "go ahead"]
         if any(signal in lower for signal in yes_signals):
             session.caller_confirmed = True
+            session.booking_attempted = True
             _transition(session, State.BOOKING)
-            return Action(needs_llm=True)
+            return Action(
+                speak="Let me check what we've got open.",
+                call_tool="book_service",
+                needs_llm=True,
+            )
 
         # Stay for corrections or re-confirmation
         return Action(needs_llm=True)
 
     def _handle_booking(self, session: CallSession, text: str) -> Action:
+        # Booking already fired from pre_confirm — caller spoke during the wait
+        if session.booking_attempted:
+            return Action(needs_llm=False)
         session.booking_attempted = True
         return Action(call_tool="book_service", needs_llm=False)
 
