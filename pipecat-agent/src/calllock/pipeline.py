@@ -92,8 +92,9 @@ async def create_pipeline(websocket: WebSocket):
 
     llm = OpenAILLMService(
         api_key=os.getenv("OPENAI_API_KEY"),
-        model="gpt-4o",
+        model="gpt-4o-mini",
     )
+    logger.info("Pipeline LLM model: gpt-4o-mini")
 
     http_session = aiohttp.ClientSession()
 
