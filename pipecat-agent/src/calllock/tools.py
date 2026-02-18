@@ -14,7 +14,13 @@ class V2Client:
     so the state machine can route to callback instead of hanging.
     """
 
-    def __init__(self, base_url: str, api_key: str = "", timeout: float = 10.0):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str = "",
+        timeout: float = 10.0,
+        client: httpx.AsyncClient | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
@@ -23,34 +29,41 @@ class V2Client:
             cooldown_seconds=60.0,
             label="V2 backend",
         )
+        if client is not None:
+            self._client = client
+        else:
+            headers = {"Content-Type": "application/json"}
+            if api_key:
+                headers["X-API-Key"] = api_key
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                headers=headers,
+                timeout=self.timeout,
+            )
 
-    def _headers(self) -> dict:
-        """Build auth headers for V2 backend requests."""
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["X-API-Key"] = self.api_key
-        return headers
+    async def close(self):
+        """Close the shared HTTP client. Call at end of call."""
+        await self._client.aclose()
 
     async def lookup_caller(self, phone: str, call_id: str) -> dict:
         if not self._circuit.should_try():
             logger.warning("V2 circuit breaker open — returning unknown caller")
             return {"found": False, "message": "V2 backend unavailable — proceeding without history."}
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, headers=self._headers()) as client:
-                resp = await client.post(
-                    f"{self.base_url}/webhook/retell/lookup_caller",
-                    json={
-                        "call": {
-                            "call_id": call_id,
-                            "from_number": phone,
-                            "metadata": {},
-                        },
-                        "args": {},
+            resp = await self._client.post(
+                "/webhook/retell/lookup_caller",
+                json={
+                    "call": {
+                        "call_id": call_id,
+                        "from_number": phone,
+                        "metadata": {},
                     },
-                )
-                resp.raise_for_status()
-                self._circuit.record_success()
-                return resp.json()
+                    "args": {},
+                },
+            )
+            resp.raise_for_status()
+            self._circuit.record_success()
+            return resp.json()
         except Exception as e:
             self._circuit.record_failure()
             logger.error("lookup_caller failed: %s", e)
@@ -68,20 +81,19 @@ class V2Client:
             logger.warning("V2 circuit breaker open — returning booking failure")
             return {"booked": False, "error": "V2 backend unavailable"}
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, headers=self._headers()) as client:
-                resp = await client.post(
-                    f"{self.base_url}/webhook/retell/book_appointment",
-                    json={
-                        "customer_name": customer_name,
-                        "customer_phone": phone,
-                        "issue_description": problem,
-                        "service_address": address,
-                        "preferred_time": preferred_time,
-                    },
-                )
-                resp.raise_for_status()
-                self._circuit.record_success()
-                return resp.json()
+            resp = await self._client.post(
+                "/webhook/retell/book_appointment",
+                json={
+                    "customer_name": customer_name,
+                    "customer_phone": phone,
+                    "issue_description": problem,
+                    "service_address": address,
+                    "preferred_time": preferred_time,
+                },
+            )
+            resp.raise_for_status()
+            self._circuit.record_success()
+            return resp.json()
         except Exception as e:
             self._circuit.record_failure()
             logger.error("book_service failed: %s", e)
@@ -100,26 +112,25 @@ class V2Client:
             logger.warning("V2 circuit breaker open — returning callback failure")
             return {"success": False, "error": "V2 backend unavailable"}
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, headers=self._headers()) as client:
-                resp = await client.post(
-                    f"{self.base_url}/webhook/retell/create_callback",
-                    json={
-                        "call": {
-                            "call_id": call_id,
-                            "from_number": phone,
-                            "metadata": {},
-                        },
-                        "args": {
-                            "reason": reason or "Callback requested",
-                            "callback_type": callback_type,
-                            "customer_name": customer_name,
-                            "urgency": urgency,
-                        },
+            resp = await self._client.post(
+                "/webhook/retell/create_callback",
+                json={
+                    "call": {
+                        "call_id": call_id,
+                        "from_number": phone,
+                        "metadata": {},
                     },
-                )
-                resp.raise_for_status()
-                self._circuit.record_success()
-                return resp.json()
+                    "args": {
+                        "reason": reason or "Callback requested",
+                        "callback_type": callback_type,
+                        "customer_name": customer_name,
+                        "urgency": urgency,
+                    },
+                },
+            )
+            resp.raise_for_status()
+            self._circuit.record_success()
+            return resp.json()
         except Exception as e:
             self._circuit.record_failure()
             logger.error("create_callback failed: %s", e)
@@ -130,17 +141,16 @@ class V2Client:
             logger.warning("V2 circuit breaker open — returning alert failure")
             return {"success": False, "error": "V2 backend unavailable"}
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, headers=self._headers()) as client:
-                resp = await client.post(
-                    f"{self.base_url}/webhook/retell/send_sales_lead_alert",
-                    json={
-                        "call": {"from_number": phone, "metadata": {}},
-                        "args": {"execution_message": reason},
-                    },
-                )
-                resp.raise_for_status()
-                self._circuit.record_success()
-                return resp.json()
+            resp = await self._client.post(
+                "/webhook/retell/send_sales_lead_alert",
+                json={
+                    "call": {"from_number": phone, "metadata": {}},
+                    "args": {"execution_message": reason},
+                },
+            )
+            resp.raise_for_status()
+            self._circuit.record_success()
+            return resp.json()
         except Exception as e:
             self._circuit.record_failure()
             logger.error("send_sales_lead_alert failed: %s", e)
@@ -167,21 +177,20 @@ class V2Client:
             if new_time:
                 args["new_date_time"] = new_time
 
-            async with httpx.AsyncClient(timeout=self.timeout, headers=self._headers()) as client:
-                resp = await client.post(
-                    f"{self.base_url}/webhook/retell/manage_appointment",
-                    json={
-                        "call": {
-                            "call_id": call_id,
-                            "from_number": phone,
-                            "metadata": {},
-                        },
-                        "args": args,
+            resp = await self._client.post(
+                "/webhook/retell/manage_appointment",
+                json={
+                    "call": {
+                        "call_id": call_id,
+                        "from_number": phone,
+                        "metadata": {},
                     },
-                )
-                resp.raise_for_status()
-                self._circuit.record_success()
-                return resp.json()
+                    "args": args,
+                },
+            )
+            resp.raise_for_status()
+            self._circuit.record_success()
+            return resp.json()
         except Exception as e:
             self._circuit.record_failure()
             logger.error("manage_appointment failed: %s", e)

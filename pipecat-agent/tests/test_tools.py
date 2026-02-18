@@ -4,18 +4,16 @@ import respx
 from calllock.tools import V2Client
 
 
-@pytest.fixture
-def client():
-    return V2Client(base_url="https://test-server.example.com")
+BASE_URL = "https://test-server.example.com"
 
 
 class TestV2ClientAuth:
     @pytest.mark.asyncio
     async def test_sends_api_key_header(self):
         """V2Client should send X-API-Key header on all requests."""
-        client = V2Client(base_url="http://test.local", api_key="test-key-123")
         with respx.mock:
-            route = respx.post("http://test.local/webhook/retell/lookup_caller").mock(
+            client = V2Client(base_url=BASE_URL, api_key="test-key-123")
+            route = respx.post(f"{BASE_URL}/webhook/retell/lookup_caller").mock(
                 return_value=httpx.Response(200, json={"found": False})
             )
             await client.lookup_caller("+15125551234", "call_123")
@@ -26,9 +24,9 @@ class TestV2ClientAuth:
     @pytest.mark.asyncio
     async def test_no_api_key_still_works(self):
         """V2Client should work without API key (for dev/testing)."""
-        client = V2Client(base_url="http://test.local")
         with respx.mock:
-            route = respx.post("http://test.local/webhook/retell/lookup_caller").mock(
+            client = V2Client(base_url=BASE_URL)
+            route = respx.post(f"{BASE_URL}/webhook/retell/lookup_caller").mock(
                 return_value=httpx.Response(200, json={"found": False})
             )
             await client.lookup_caller("+15125551234", "call_123")
@@ -39,9 +37,9 @@ class TestBookServiceEndpoint:
     @pytest.mark.asyncio
     async def test_calls_correct_booking_endpoint(self):
         """book_service should call /webhook/retell/book_appointment, not /api/retell/book-service."""
-        client = V2Client(base_url="http://test.local")
         with respx.mock:
-            route = respx.post("http://test.local/webhook/retell/book_appointment").mock(
+            client = V2Client(base_url=BASE_URL)
+            route = respx.post(f"{BASE_URL}/webhook/retell/book_appointment").mock(
                 return_value=httpx.Response(200, json={"booked": True, "booking_time": "2026-02-17T10:00:00Z"})
             )
             result = await client.book_service(
@@ -52,59 +50,83 @@ class TestBookServiceEndpoint:
             assert result["booked"] is True
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_lookup_caller_returns_result(client):
-    respx.post("https://test-server.example.com/webhook/retell/lookup_caller").mock(
-        return_value=httpx.Response(200, json={
-            "found": True,
-            "customerName": "Jonas",
-            "zipCode": "78745",
-        })
-    )
-    result = await client.lookup_caller("+15125551234", "call_123")
-    assert result["found"] is True
-    assert result["customerName"] == "Jonas"
+async def test_lookup_caller_returns_result():
+    with respx.mock:
+        client = V2Client(base_url=BASE_URL)
+        respx.post(f"{BASE_URL}/webhook/retell/lookup_caller").mock(
+            return_value=httpx.Response(200, json={
+                "found": True,
+                "customerName": "Jonas",
+                "zipCode": "78745",
+            })
+        )
+        result = await client.lookup_caller("+15125551234", "call_123")
+        assert result["found"] is True
+        assert result["customerName"] == "Jonas"
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_lookup_caller_handles_failure(client):
-    respx.post("https://test-server.example.com/webhook/retell/lookup_caller").mock(
-        return_value=httpx.Response(500)
-    )
-    result = await client.lookup_caller("+15125551234", "call_123")
-    assert result["found"] is False
+async def test_lookup_caller_handles_failure():
+    with respx.mock:
+        client = V2Client(base_url=BASE_URL)
+        respx.post(f"{BASE_URL}/webhook/retell/lookup_caller").mock(
+            return_value=httpx.Response(500)
+        )
+        result = await client.lookup_caller("+15125551234", "call_123")
+        assert result["found"] is False
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_book_service_success(client):
-    respx.post("https://test-server.example.com/webhook/retell/book_appointment").mock(
-        return_value=httpx.Response(200, json={
-            "booked": True,
-            "booking_time": "2026-02-15T10:00:00",
-        })
-    )
-    result = await client.book_service(
-        customer_name="Jonas",
-        problem="AC blowing warm",
-        address="4210 South Lamar",
-        preferred_time="morning",
-        phone="+15125551234",
-    )
-    assert result["booked"] is True
+async def test_book_service_success():
+    with respx.mock:
+        client = V2Client(base_url=BASE_URL)
+        respx.post(f"{BASE_URL}/webhook/retell/book_appointment").mock(
+            return_value=httpx.Response(200, json={
+                "booked": True,
+                "booking_time": "2026-02-15T10:00:00",
+            })
+        )
+        result = await client.book_service(
+            customer_name="Jonas",
+            problem="AC blowing warm",
+            address="4210 South Lamar",
+            preferred_time="morning",
+            phone="+15125551234",
+        )
+        assert result["booked"] is True
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_create_callback_success(client):
-    respx.post("https://test-server.example.com/webhook/retell/create_callback").mock(
-        return_value=httpx.Response(200, json={"success": True})
-    )
-    result = await client.create_callback(
-        phone="+15125551234",
-        callback_type="service",
-        reason="Caller wants to schedule",
-    )
-    assert result["success"] is True
+async def test_create_callback_success():
+    with respx.mock:
+        client = V2Client(base_url=BASE_URL)
+        respx.post(f"{BASE_URL}/webhook/retell/create_callback").mock(
+            return_value=httpx.Response(200, json={"success": True})
+        )
+        result = await client.create_callback(
+            phone="+15125551234",
+            callback_type="service",
+            reason="Caller wants to schedule",
+        )
+        assert result["success"] is True
+
+
+class TestV2ClientPooling:
+    def test_client_has_shared_session(self):
+        """V2Client should use a shared httpx.AsyncClient, not create per-request."""
+        client = V2Client(base_url="https://example.com", api_key="test")
+        assert hasattr(client, "_client"), "V2Client should have a shared _client"
+
+    @pytest.mark.asyncio
+    async def test_close_cleans_up(self):
+        """close() should cleanly shut down the shared client."""
+        client = V2Client(base_url="https://example.com", api_key="test")
+        await client.close()
+        assert client._client.is_closed
+
+    def test_accepts_injected_client(self):
+        """V2Client should accept a pre-configured httpx client for testing (review C2)."""
+        mock_client = httpx.AsyncClient(base_url="https://injected.local")
+        v2 = V2Client(base_url="https://example.com", api_key="test", client=mock_client)
+        assert v2._client is mock_client

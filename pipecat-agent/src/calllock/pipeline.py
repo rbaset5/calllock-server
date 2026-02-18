@@ -176,8 +176,11 @@ async def create_pipeline(websocket: WebSocket):
         await task.queue_frames([EndFrame()])
 
     runner = PipelineRunner()
-    await runner.run(task)
-    await http_session.close()
+    try:
+        await runner.run(task)
+    finally:
+        await http_session.close()
+        await tools.close()
 
     # Flush final agent responses to transcript before post-call processing
     sm_processor.flush_transcript()
