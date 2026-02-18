@@ -36,59 +36,37 @@ def processor():
     return proc
 
 
-class TestTranscriptionDebounce:
+class TestDirectTranscriptionProcessing:
+    """With Smart Turn handling coalescing upstream, transcription frames go straight through."""
+
     @pytest.mark.asyncio
-    async def test_rapid_frames_coalesced(self, processor):
-        """Frames arriving within 400ms should be coalesced into one turn."""
-        processor._debounce_seconds = 0.05  # 50ms for fast tests
-
-        # Send 3 rapid frames
-        await processor.process_frame(TranscriptionFrame(text="Yeah.", user_id="", timestamp=""), FrameDirection.DOWNSTREAM)
-        await processor.process_frame(TranscriptionFrame(text="Mhmm.", user_id="", timestamp=""), FrameDirection.DOWNSTREAM)
-        await processor.process_frame(TranscriptionFrame(text="It's broken.", user_id="", timestamp=""), FrameDirection.DOWNSTREAM)
-
-        # Wait for debounce to fire
-        await asyncio.sleep(0.1)
-
-        # State machine should have been called once, not three times
+    async def test_transcription_processed_immediately(self, processor):
+        """TranscriptionFrame should trigger state machine without debounce delay."""
+        await processor.process_frame(
+            TranscriptionFrame(text="my AC is broken", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
         assert processor.session.turn_count == 1
 
     @pytest.mark.asyncio
-    async def test_slow_frames_processed_separately(self, processor):
-        """Frames arriving >debounce apart should be separate turns."""
-        processor._debounce_seconds = 0.05
-
-        await processor.process_frame(TranscriptionFrame(text="Yeah.", user_id="", timestamp=""), FrameDirection.DOWNSTREAM)
-        await asyncio.sleep(0.1)  # Wait for first debounce to fire
-
-        await processor.process_frame(TranscriptionFrame(text="No.", user_id="", timestamp=""), FrameDirection.DOWNSTREAM)
-        await asyncio.sleep(0.1)  # Wait for second debounce to fire
-
+    async def test_multiple_frames_are_separate_turns(self, processor):
+        """Each TranscriptionFrame is its own turn (Smart Turn handles coalescing upstream)."""
+        processor.session.state = State.SAFETY
+        await processor.process_frame(
+            TranscriptionFrame(text="no gas smell", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
+        await processor.process_frame(
+            TranscriptionFrame(text="everything is fine", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
         assert processor.session.turn_count == 2
-
-    @pytest.mark.asyncio
-    async def test_coalesced_text_is_concatenated(self, processor):
-        """Coalesced text should join fragments with space."""
-        processor._debounce_seconds = 0.05
-
-        await processor.process_frame(TranscriptionFrame(text="Yeah.", user_id="", timestamp=""), FrameDirection.DOWNSTREAM)
-        await processor.process_frame(TranscriptionFrame(text="It's broken.", user_id="", timestamp=""), FrameDirection.DOWNSTREAM)
-
-        await asyncio.sleep(0.1)
-
-        # Check the last user entry in conversation_history
-        user_entries = [e for e in processor.session.conversation_history if e["role"] == "user"]
-        assert len(user_entries) == 1
-        assert "Yeah." in user_entries[0]["content"]
-        assert "It's broken." in user_entries[0]["content"]
 
 
 class TestNonBlockingExtraction:
     @pytest.mark.asyncio
     async def test_extraction_runs_in_background(self, processor):
         """Extraction should not block the transcription frame from reaching the LLM."""
-        processor._debounce_seconds = 0.05
-
         # Make extraction take 500ms (simulating real GPT-4o-mini call)
         extraction_started = asyncio.Event()
         extraction_finished = asyncio.Event()
@@ -107,11 +85,9 @@ class TestNonBlockingExtraction:
             {"role": "agent", "content": "hi"},
         ]
 
-        await processor.process_frame(
-            TranscriptionFrame(text="My AC is broken.", user_id="", timestamp=""),
-            FrameDirection.DOWNSTREAM,
-        )
-        await asyncio.sleep(0.1)  # Let debounce fire
+        frame = TranscriptionFrame(text="My AC is broken.", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+        await asyncio.sleep(0)  # Yield to let background task start
 
         # Frame should have been pushed downstream BEFORE extraction finishes
         assert processor.push_frame.called, "Frame should be pushed without waiting for extraction"
@@ -125,8 +101,6 @@ class TestNonBlockingExtraction:
     @pytest.mark.asyncio
     async def test_extraction_error_does_not_crash(self, processor):
         """If background extraction raises, it should log and not crash the pipeline."""
-        processor._debounce_seconds = 0.05
-
         async def exploding_extraction():
             raise RuntimeError("extraction boom")
 
@@ -139,36 +113,23 @@ class TestNonBlockingExtraction:
         ]
 
         # Should not raise
-        await processor.process_frame(
-            TranscriptionFrame(text="My AC is broken.", user_id="", timestamp=""),
-            FrameDirection.DOWNSTREAM,
-        )
-        await asyncio.sleep(0.15)  # Let debounce fire + extraction attempt
+        frame = TranscriptionFrame(text="My AC is broken.", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+        await asyncio.sleep(0.05)  # Let background task attempt extraction
 
         # Pipeline still works
         assert processor.push_frame.called
-
-
-class TestDebounceWindow:
-    def test_debounce_window_exceeds_vad_stop(self, processor):
-        """Debounce window (400ms) must exceed VAD stop_secs (300ms) to prevent split utterances."""
-        assert processor._debounce_seconds >= 0.4
 
 
 class TestEndCallAfterLLM:
     @pytest.mark.asyncio
     async def test_end_call_with_llm_schedules_endframe(self, processor):
         """When end_call=True and needs_llm=True, EndFrame should be scheduled after delay."""
-        processor._debounce_seconds = 0.05
-
-        # Put session in DONE state — triggers end_call=True, needs_llm=True
+        # Put session in CONFIRM state — triggers end_call=True, needs_llm=True
         processor.session.state = State.CONFIRM
 
         frame = TranscriptionFrame(text="Thanks bye", user_id="", timestamp="")
-        await processor.process_frame(frame, FrameDirection.DOWNSTREAM)
-
-        # Wait for debounce + delayed EndFrame (3s default, but we'll check the task exists)
-        await asyncio.sleep(0.1)  # Let debounce fire
+        await processor._handle_transcription(frame)
 
         # Transcription frame should be pushed downstream for LLM
         pushed_frames = [call.args[0] for call in processor.push_frame.call_args_list]
@@ -208,8 +169,6 @@ class TestTranscriptLogging:
         The LLM output flows downstream past the processor, so the processor
         must capture agent responses from the LLM context on each user turn.
         """
-        processor._debounce_seconds = 0.05
-
         # Simulate: greeting is already in context (added by context_aggregator)
         processor.context.messages = [
             {"role": "system", "content": "test"},
@@ -217,11 +176,8 @@ class TestTranscriptLogging:
         ]
 
         # First user utterance arrives
-        await processor.process_frame(
-            TranscriptionFrame(text="My AC is broken", user_id="", timestamp=""),
-            FrameDirection.DOWNSTREAM,
-        )
-        await asyncio.sleep(0.1)  # Let debounce fire
+        frame = TranscriptionFrame(text="My AC is broken", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
 
         # The greeting should now be in the transcript as agent
         agent_entries = [e for e in processor.session.transcript_log if e["role"] == "agent"]
@@ -256,18 +212,13 @@ class TestContextPreservation:
         and user text was manually appended. Now force_llm=True triggers
         the push, and the context aggregator handles the rest.
         """
-        processor._debounce_seconds = 0.05
-
         processor.context.messages = [
             {"role": "system", "content": "test"},
             {"role": "assistant", "content": "Thanks for calling ACE Cooling, how can I help you?"},
         ]
 
-        await processor.process_frame(
-            TranscriptionFrame(text="my AC is broken", user_id="", timestamp=""),
-            FrameDirection.DOWNSTREAM,
-        )
-        await asyncio.sleep(0.1)  # Let debounce fire
+        frame = TranscriptionFrame(text="my AC is broken", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
 
         # With force_llm fix, the TranscriptionFrame is pushed downstream
         pushed_types = [type(call.args[0]).__name__ for call in processor.push_frame.call_args_list]
@@ -281,8 +232,6 @@ class TestContextPreservation:
         """When action has both speak and call_tool, the speak (TTSSpeakFrame)
         should be pushed before the tool executes, so the caller hears
         acknowledgment during long tool calls."""
-        processor._debounce_seconds = 0.05
-
         # Track frame push order
         pushed = []
         original_push = processor.push_frame
@@ -299,11 +248,8 @@ class TestContextPreservation:
             {"role": "assistant", "content": "Greeting"},
         ]
 
-        await processor.process_frame(
-            TranscriptionFrame(text="my AC is broken", user_id="", timestamp=""),
-            FrameDirection.DOWNSTREAM,
-        )
-        await asyncio.sleep(0.1)
+        frame = TranscriptionFrame(text="my AC is broken", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
 
         # TTSSpeakFrame should appear before tool execution completes
         if "TTSSpeakFrame" in pushed:

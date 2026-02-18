@@ -14,6 +14,7 @@ from pipecat.transports.websocket.fastapi import (
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService, OpenAILLMContext
 from pipecat.services.inworld.tts import InworldHttpTTSService
@@ -71,14 +72,17 @@ async def create_pipeline(websocket: WebSocket):
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
+            # NOTE: vad_analyzer on transport is deprecated in pipecat >=0.0.100.
+            # Will need to move to LLMUserAggregator when upgrading.
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
                     confidence=0.85,   # Higher threshold to ignore TV/background noise
-                    start_secs=0.4,    # Require 400ms of speech before triggering
-                    stop_secs=0.3,     # Wait 300ms of silence before ending utterance
+                    start_secs=0.4,    # Keep at 0.4 for 8kHz telephone noise filtering
+                    stop_secs=0.2,     # Was 0.3 — Smart Turn decides when turn is complete
                     min_volume=0.8,    # Ignore quieter sounds (TV, ambient noise)
                 ),
             ),
+            turn_analyzer=LocalSmartTurnAnalyzerV3(),
             serializer=serializer,
         ),
     )

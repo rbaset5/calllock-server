@@ -51,35 +51,20 @@ class StateMachineProcessor(FrameProcessor):
         self.machine = machine
         self.tools = tools
         self.context = context
-        self._debounce_seconds = 0.4  # Must exceed VAD stop_secs (0.3) to prevent split utterances
-        self._debounce_task: asyncio.Task | None = None
-        self._debounce_buffer: list[str] = []
         self._context_capture_idx = 1  # Skip system message at index 0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
-            self._debounce_buffer.append(frame.text.strip())
-            if self._debounce_task and not self._debounce_task.done():
-                self._debounce_task.cancel()
-            self._debounce_task = asyncio.create_task(self._debounce_fire(frame))
+            logger.debug(f"TranscriptionFrame arrived: '{frame.text.strip()}'")
+            await self._handle_transcription(frame)
         elif isinstance(frame, InterimTranscriptionFrame):
             # Ignore interim STT — these are partial user speech fragments,
             # not agent responses. They extend TextFrame but not TranscriptionFrame.
             await self.push_frame(frame, direction)
         else:
             await self.push_frame(frame, direction)
-
-    async def _debounce_fire(self, original_frame: TranscriptionFrame):
-        """Wait for debounce period, then process coalesced text."""
-        await asyncio.sleep(self._debounce_seconds)
-        text = " ".join(self._debounce_buffer)
-        self._debounce_buffer.clear()
-        coalesced = TranscriptionFrame(
-            text=text, user_id=original_frame.user_id, timestamp=original_frame.timestamp
-        )
-        await self._handle_transcription(coalesced)
 
     def _capture_agent_responses(self):
         """Capture new assistant messages from LLM context to transcript log.
