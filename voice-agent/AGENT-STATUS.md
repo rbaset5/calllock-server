@@ -1,18 +1,85 @@
 # AGENT STATUS
 
-- Version: v9-triage (15-state) — deployed Feb 12 2026 (Patch #18)
-- Previous: v9-triage Patch #17
+- Version: v10-simplified (10-state) — deployed Feb 14 2026
+- Previous: v9-triage (15-state) Patch #18
 - Agent ID: agent_4fb753a447e714064e71fadc6d
 - LLM ID: llm_4621893c9db9478b431a418dc2b6
-- Retell Phone Number Version: 78 (bound to +13126463816)
-- Retell Published Version: 78
+- Retell Phone Number Version: 79 (bound to +13126463816)
+- Retell Published Version: 79
 - Agent Name: CallSeal - 8 State v6
-- Deployment status: LIVE — Patch #18: Urgency state split (structural booking-skip fix). 15 states.
+- Deployment status: LIVE — v10 simplified (10 states). v9 fallback: retell-llm-v9-triage.json
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below
 - Responsiveness: 0.7 (reduced from 1.0 to mitigate echo)
 - LESSON: Phone number was pinned to version 15. Publishing new versions does NOT update the phone binding. Must update via PATCH /update-phone-number.
-- Config file: retell-llm-v9-triage.json
+- Config file: retell-llm-v10-simplified.json
+- Config file (fallback): retell-llm-v9-triage.json
+
+## Feb 14 — v10 Simplified State Machine (15 → 10 states)
+
+Design doc: `docs/plans/2026-02-14-state-machine-simplification-design.md`
+
+### Why
+18 reactive patches in 5 days. Prompt-based guards: 0% success rate. Structural fixes (removing tools): 100% success rate. The 15-state machine had too many states where the LLM could take shortcuts.
+
+### Design Principle
+**States that make decisions have no tools. States that take actions have specific tools. Terminal states handle end_call.**
+
+### States Cut
+| State | Replacement |
+|-------|-------------|
+| non_service | welcome routes to callback terminal |
+| follow_up | lookup routes to callback terminal |
+| manage_booking | lookup routes to callback terminal |
+| urgency_callback | merged into callback terminal |
+| booking_failed | merged into callback terminal |
+
+### States Merged
+| Old States | New State |
+|-----------|-----------|
+| urgency + pre_confirm | confirm (no tools, edges only) |
+| confirm (old terminal) | done (renamed) |
+| safety_emergency | safety_exit (renamed) |
+
+### The 10 States
+| State | Type | Tools | Edges To |
+|-------|------|-------|----------|
+| welcome | routing | (none) | lookup, callback |
+| lookup | action | lookup_caller | safety, callback |
+| safety | decision | (none) | service_area, safety_exit |
+| safety_exit | terminal | end_call | — |
+| service_area | semi-terminal | end_call (out-of-area) | discovery |
+| discovery | decision | (none) | confirm |
+| confirm | decision | (none) | booking, callback |
+| booking | action | book_service (NO end_call) | done, callback |
+| done | terminal | end_call | — |
+| callback | terminal | create_callback_request, send_sales_lead_alert, end_call | — |
+
+### Structural Guarantees
+- booking has NO end_call — agent cannot hang up after failed booking
+- confirm has NO tools — agent cannot skip to booking or end call
+- discovery has NO tools — same guarantee
+- safety has NO tools — proven in Patch #15
+- ALL non-happy-path exits converge to ONE terminal: callback
+
+### Deploy Steps
+1. Deploy v10 config to Retell LLM via API PATCH
+2. Publish new version
+3. Bind phone number to new version
+4. Test 3 scripted scenarios (happy path, booking failure, non-service)
+5. If any failure: revert to v9 (still available as fallback)
+
+### Deploy Status
+- [x] Config built: retell-llm-v10-simplified.json
+- [x] Validated: all structural guarantees, tool URLs, edge connections
+- [x] Deployed to Retell LLM via API PATCH (version 79)
+- [x] Phone number bound to version 79
+- [ ] Test: New caller → booking succeeds (happy path)
+- [ ] Test: New caller → booking fails → callback
+- [ ] Test: Vendor/spam → callback → end_call
+- [ ] Verify dashboard receives correct data
+
+---
 
 ## Feb 12 Patch #18 — Urgency State Split (Structural Booking-Skip Fix)
 
