@@ -91,6 +91,7 @@ def _transition(session: CallSession, new_state: State):
     """Helper to transition state and reset turn counter."""
     session.state = new_state
     session.state_turn_count = 0
+    session.agent_has_responded = False
 
 
 class StateMachine:
@@ -102,7 +103,12 @@ class StateMachine:
 
     def process(self, session: CallSession, user_text: str) -> Action:
         session.turn_count += 1
-        session.state_turn_count += 1
+
+        # Only count a new state turn when the agent has responded since last increment.
+        # Consecutive user frames (STT fragments) are part of the same exchange.
+        if session.agent_has_responded:
+            session.state_turn_count += 1
+            session.agent_has_responded = False
 
         if session.turn_count > MAX_TURNS_PER_CALL:
             logger.warning("Per-call turn limit exceeded — escalating to callback")

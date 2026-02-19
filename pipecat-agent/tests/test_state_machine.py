@@ -594,14 +594,105 @@ class TestStateTurnCountReset:
         assert session.state == State.DISCOVERY  # BUG: was CALLBACK before fix
 
     def test_turn_limit_still_fires_within_state(self, sm, session):
-        """Turn limit must still work when turns accumulate in a single state."""
+        """Turn limit must still work when exchanges accumulate in a single state."""
         session.state = State.SAFETY
         session.state_turn_count = 0
 
-        # 6 turns in SAFETY (exceeds MAX_TURNS_PER_STATE=5)
+        # 6 exchanges in SAFETY (exceeds MAX_TURNS_PER_STATE=5)
         for _ in range(5):
+            session.agent_has_responded = True  # simulate agent asking a question
             sm.process(session, "what do you mean?")
         assert session.state == State.SAFETY
 
+        session.agent_has_responded = True
         sm.process(session, "what?")
         assert session.state == State.CALLBACK  # turn limit fires
+
+
+class TestExchangeBasedTurnCounting:
+    """state_turn_count increments on exchanges, not raw STT frames."""
+
+    def test_consecutive_fragments_count_as_one_turn(self, sm, session):
+        """6 consecutive user frames without agent response = 1 state turn."""
+        session.state = State.DISCOVERY
+        session.agent_has_responded = True  # agent asked a question
+
+        sm.process(session, "Okay it's")
+        sm.process(session, "four three two nine")
+        sm.process(session, "Franklin Street")
+        sm.process(session, "Franklin")
+        sm.process(session, "Austin")
+        sm.process(session, "Texas")
+
+        assert session.state_turn_count == 1  # all one exchange
+
+    def test_turn_increments_after_agent_responds(self, sm, session):
+        """Agent response + next user frame = new exchange."""
+        session.state = State.DISCOVERY
+        session.agent_has_responded = True  # agent asked a question
+
+        sm.process(session, "the unit is making a loud noise")
+        assert session.state_turn_count == 1
+
+        # Simulate agent responding
+        session.agent_has_responded = True
+
+        sm.process(session, "it started yesterday")
+        assert session.state_turn_count == 2
+
+    def test_first_utterance_without_agent_response_no_increment(self, sm, session):
+        """If agent hasn't responded yet, don't increment state turn."""
+        session.state = State.DISCOVERY
+        session.agent_has_responded = False
+
+        sm.process(session, "hello")
+        assert session.state_turn_count == 0
+
+    def test_transition_resets_agent_has_responded(self, sm, session):
+        """State transition must reset agent_has_responded to False."""
+        session.state = State.SAFETY
+        session.agent_has_responded = True
+        sm.process(session, "no")  # triggers transition to SERVICE_AREA
+        assert session.state == State.SERVICE_AREA
+        assert session.agent_has_responded is False
+
+    def test_per_call_turn_count_always_increments(self, sm, session):
+        """Per-call turn_count increments on every frame regardless."""
+        session.state = State.DISCOVERY
+        session.agent_has_responded = False
+
+        sm.process(session, "fragment one")
+        sm.process(session, "fragment two")
+        sm.process(session, "fragment three")
+
+        assert session.turn_count == 3  # always increments
+        assert session.state_turn_count == 0  # no agent response, no state-turn increment
+
+    def test_discovery_address_fragments_dont_trigger_callback(self, sm, session):
+        """Regression: call CA4e393da — address fragments exhausted turn limit.
+
+        Real call had caller dictate address in 5 STT fragments in discovery,
+        burning through MAX_TURNS_PER_STATE and escalating to CALLBACK before
+        the agent could ask a follow-up question.
+        """
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC not cooling"
+        session.agent_has_responded = True  # agent asked for address
+
+        # Caller dictates address in 5 fragments (real Deepgram STT behavior)
+        sm.process(session, "Okay it's")
+        sm.process(session, "four three two nine")
+        sm.process(session, "Franklin Street")
+        sm.process(session, "Franklin")
+        sm.process(session, "Austin Texas")
+
+        # Should still be in DISCOVERY, NOT escalated to CALLBACK
+        assert session.state == State.DISCOVERY
+        assert session.state_turn_count == 1
+
+        # Now set address and verify progression to URGENCY
+        session.service_address = "4329 Franklin Street"
+        session.agent_has_responded = True
+        sm.process(session, "yeah that's right")
+        assert session.state == State.URGENCY
