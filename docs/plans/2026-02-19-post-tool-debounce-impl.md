@@ -4,7 +4,13 @@
 
 **Goal:** After a tool call transitions state (force_llm=True), buffer incoming transcription fragments for 1.5s before triggering the LLM, so the caller finishes their thought before the agent responds.
 
-**Architecture:** Add buffer mode to `StateMachineProcessor`. When `force_llm=True`, enter buffer mode: accumulate transcription texts, reset a 1.5s debounce timer on each new fragment, flush concatenated text to LLM when timer fires. Everything else (state machine, extraction, transcript logging) runs normally during buffering. End-call actions bypass the buffer.
+**Architecture:** Add buffer mode to `StateMachineProcessor`. When `force_llm=True`, enter buffer mode: accumulate transcription texts, reset a 1.5s debounce timer on each new fragment, flush concatenated text to LLM when timer fires. During buffer mode, the state machine does NOT run on subsequent fragments — only text accumulation and transcript logging happen. On flush, the concatenated text is processed through the state machine once. End-call actions bypass the buffer.
+
+**Review changes (2026-02-19):**
+1. Architecture: Don't run state machine during buffer mode — prevents turn_count inflation and silent state transitions
+2. Code quality: Extract `text_display` variable in flush logging — DRY fix
+3. Tests: Add safety emergency during buffer mode test
+4. Performance: Override `BUFFER_DEBOUNCE_S=0.05` in test fixture — saves ~10s of sleep
 
 **Tech Stack:** Python asyncio (timers via `asyncio.create_task` + `asyncio.sleep`), Pipecat `TranscriptionFrame`.
 
@@ -17,7 +23,34 @@
 
 **Step 1: Write the failing tests**
 
-Add a new test class `TestPostToolDebounce` at the end of the file:
+First, update the `processor` fixture to use fast debounce for tests:
+
+```python
+@pytest.fixture
+def processor():
+    session = CallSession(phone_number="+15125551234")
+    machine = StateMachine()
+    tools = AsyncMock()
+    tools.lookup_caller.return_value = {"found": False}
+    tools.book_service.return_value = {"booked": False}
+    tools.create_callback.return_value = {"success": True}
+    tools.send_sales_lead_alert.return_value = {"success": True}
+    context = MagicMock()
+    context.messages = [{"role": "system", "content": "test prompt"}]
+    proc = StateMachineProcessor(
+        session=session,
+        machine=machine,
+        tools=tools,
+        context=context,
+    )
+    proc.push_frame = AsyncMock()
+    proc._run_extraction = AsyncMock()
+    # Fast debounce for tests — real value (1.5s) validated by production calls
+    proc.BUFFER_DEBOUNCE_S = 0.05
+    return proc
+```
+
+Then add a new test class `TestPostToolDebounce` at the end of the file:
 
 ```python
 class TestPostToolDebounce:
@@ -154,44 +187,74 @@ async def _buffer_debounce_wait(self):
     await self._flush_buffer()
 
 async def _flush_buffer(self):
-    """Push accumulated fragments to LLM as one concatenated message."""
+    """Push accumulated fragments to LLM as one concatenated message.
+
+    Runs the state machine on the concatenated text (skipped during buffer mode)
+    and handles end_call if the flushed text triggers a safety emergency.
+    """
     if not self._buffer_mode:
         return
     self._buffer_mode = False
     combined_text = " ".join(self._buffer_texts)
+
+    # Run state machine on concatenated text (skipped during buffer mode)
+    action = self.machine.process(self.session, combined_text)
+
+    # Update system prompt for current state after state machine ran
+    self.context.messages[0]["content"] = get_system_prompt(self.session)
+
+    # Run extraction if applicable
+    if self.session.state.value in ("service_area", "discovery", "urgency", "pre_confirm"):
+        asyncio.create_task(self._safe_extraction())
+
     combined_frame = TranscriptionFrame(
         text=combined_text,
         user_id=self._buffer_frame.user_id if self._buffer_frame else "",
         timestamp=self._buffer_frame.timestamp if self._buffer_frame else "",
     )
-    logger.info(
-        f"[{self.session.state.value}] Buffer flush: {len(self._buffer_texts)} fragments → "
-        f"'{combined_text[:80]}...'" if len(combined_text) > 80 else
-        f"[{self.session.state.value}] Buffer flush: {len(self._buffer_texts)} fragments → "
-        f"'{combined_text}'"
-    )
+    text_display = f"'{combined_text[:80]}...'" if len(combined_text) > 80 else f"'{combined_text}'"
+    logger.info(f"[{self.session.state.value}] Buffer flush: {len(self._buffer_texts)} fragments → {text_display}")
     self._buffer_texts = []
     self._buffer_frame = None
     if self._buffer_timer and not self._buffer_timer.done():
         self._buffer_timer.cancel()
     self._buffer_timer = None
-    await self.push_frame(combined_frame, FrameDirection.DOWNSTREAM)
 
-def _cancel_buffer(self):
-    """Cancel buffer without flushing (used before end_call)."""
-    self._buffer_mode = False
-    self._buffer_texts = []
-    self._buffer_frame = None
-    if self._buffer_timer and not self._buffer_timer.done():
-        self._buffer_timer.cancel()
-    self._buffer_timer = None
+    # Handle end_call from flushed text (e.g., safety emergency)
+    if action.end_call:
+        if action.needs_llm:
+            await self.push_frame(combined_frame, FrameDirection.DOWNSTREAM)
+            asyncio.create_task(self._delayed_end_call(delay=3.0))
+        else:
+            await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+        return
+
+    await self.push_frame(combined_frame, FrameDirection.DOWNSTREAM)
 ```
+
+Note: `_cancel_buffer` is no longer needed (removed). The end_call path no longer occurs during buffer mode because the state machine doesn't run on buffered fragments.
 
 **Step 3: Modify `_handle_transcription` to use buffer mode**
 
-Replace the section starting at line 121 (`# Speak canned message...`) through the end of the method with:
+Replace the section starting at line 118 (`# Run state machine`) through the end of the method with:
 
 ```python
+        # Buffer mode: skip state machine, just accumulate text
+        # (review fix: don't run state machine during buffer to prevent
+        # turn_count inflation and silent state transitions)
+        if self._buffer_mode:
+            self._buffer_texts.append(text)
+            self._buffer_frame = frame
+            if time.time() - self._buffer_start_time >= self.BUFFER_MAX_S:
+                logger.info(f"[{self.session.state.value}] Buffer max time reached, flushing")
+                await self._flush_buffer()
+            else:
+                self._reset_buffer_timer()
+            return
+
+        # Run state machine
+        action = self.machine.process(self.session, text)
+
         # Speak canned message immediately (e.g., "One moment" before a slow tool call)
         if action.speak:
             await self.push_frame(TTSSpeakFrame(text=action.speak), FrameDirection.DOWNSTREAM)
@@ -211,10 +274,8 @@ Replace the section starting at line 121 (`# Speak canned message...`) through t
         if self.session.state.value in ("service_area", "discovery", "urgency", "pre_confirm"):
             asyncio.create_task(self._safe_extraction())
 
-        # End the call if needed — bypasses buffer
+        # End the call if needed
         if action.end_call:
-            if self._buffer_mode:
-                await self._flush_buffer()
             if action.needs_llm or force_llm:
                 await self.push_frame(frame, FrameDirection.DOWNSTREAM)
                 asyncio.create_task(self._delayed_end_call(delay=3.0))
@@ -223,19 +284,8 @@ Replace the section starting at line 121 (`# Speak canned message...`) through t
             return
 
         # Post-tool debounce: buffer fragments so caller finishes their thought
-        if force_llm and not self._buffer_mode:
+        if force_llm:
             self._start_buffer(text, frame)
-            return
-
-        if self._buffer_mode:
-            self._buffer_texts.append(text)
-            self._buffer_frame = frame  # Keep latest frame for flush
-            # Check max buffer time
-            if time.time() - self._buffer_start_time >= self.BUFFER_MAX_S:
-                logger.info(f"[{self.session.state.value}] Buffer max time reached, flushing")
-                await self._flush_buffer()
-            else:
-                self._reset_buffer_timer()
             return
 
         # Normal path: pass transcription downstream if LLM should generate response
@@ -250,6 +300,8 @@ Replace the section starting at line 121 (`# Speak canned message...`) through t
             # Preserve user text in LLM context even when LLM won't respond.
             self.context.messages.append({"role": "user", "content": text})
 ```
+
+**Key change from original plan:** The buffer mode early-return is now BEFORE `machine.process()`. During buffer mode, the state machine doesn't run on subsequent fragments — no turn_count inflation, no silent state transitions. The `_flush_buffer` method (see Step 2) runs the state machine once on the concatenated text before pushing downstream.
 
 **Step 4: Run the Task 1 tests to verify they pass**
 
@@ -495,32 +547,57 @@ git commit -m "test: update existing tests for post-tool debounce buffer behavio
         assert processor._buffer_mode is False
 
     @pytest.mark.asyncio
+    async def test_safety_emergency_during_buffer(self, processor):
+        """If buffered text contains a safety emergency, flush should detect and handle it."""
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+            {"role": "assistant", "content": "Greeting"},
+        ]
+
+        # Enter buffer mode via lookup transition
+        f1 = TranscriptionFrame(text="yeah I'm having", user_id="", timestamp="")
+        await processor._handle_transcription(f1)
+        assert processor._buffer_mode is True
+
+        # Second fragment mentions gas smell (safety emergency)
+        f2 = TranscriptionFrame(text="a gas smell in my house", user_id="", timestamp="")
+        await processor._handle_transcription(f2)
+
+        # Wait for debounce to flush
+        await asyncio.sleep(processor.BUFFER_DEBOUNCE_S + 0.2)
+
+        # The flushed text should have triggered safety detection
+        # State should have transitioned to SAFETY_EXIT
+        assert processor.session.state == State.SAFETY_EXIT
+
+    @pytest.mark.asyncio
     async def test_debounce_resets_on_new_fragment(self, processor):
         """Each new fragment during buffer mode should reset the debounce timer."""
         processor.context.messages = [
             {"role": "system", "content": "test"},
             {"role": "assistant", "content": "Greeting"},
         ]
+        half_debounce = processor.BUFFER_DEBOUNCE_S / 2
 
         # Enter buffer mode
         f1 = TranscriptionFrame(text="my AC", user_id="", timestamp="")
         await processor._handle_transcription(f1)
         assert processor._buffer_mode is True
 
-        # Wait 1 second (less than debounce), send another fragment
-        await asyncio.sleep(1.0)
+        # Wait half the debounce, send another fragment — timer resets
+        await asyncio.sleep(half_debounce)
         f2 = TranscriptionFrame(text="is broken", user_id="", timestamp="")
         await processor._handle_transcription(f2)
 
         # Should still be buffering (timer was reset)
         assert processor._buffer_mode is True
 
-        # Wait another 1 second — still less than debounce from last fragment
-        await asyncio.sleep(1.0)
+        # Wait half debounce again — still less than full debounce from last fragment
+        await asyncio.sleep(half_debounce)
         assert processor._buffer_mode is True
 
-        # Wait the full debounce from the last fragment
-        await asyncio.sleep(0.7)
+        # Wait full debounce from last fragment
+        await asyncio.sleep(processor.BUFFER_DEBOUNCE_S)
 
         pushed_frames = [c.args[0] for c in processor.push_frame.call_args_list]
         transcription_frames = [f for f in pushed_frames if isinstance(f, TranscriptionFrame)]
