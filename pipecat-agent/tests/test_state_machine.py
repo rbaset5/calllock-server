@@ -317,6 +317,12 @@ class TestUrgencyState:
         action = sm.process(session, "I'm not sure")
         assert session.state == State.URGENCY
 
+    def test_soonest_triggers_urgent(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "I was looking for the soonest available appointment")
+        assert session.urgency_tier == "urgent"
+        assert session.state == State.PRE_CONFIRM
+
 
 # --- PRE_CONFIRM state ---
 

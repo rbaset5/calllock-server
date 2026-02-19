@@ -249,7 +249,7 @@ class StateMachine:
             return Action(needs_llm=True)
 
         # Extract timing from response
-        urgent_signals = ["today", "asap", "right away", "as soon as", "emergency", "right now"]
+        urgent_signals = ["today", "asap", "right away", "as soon as", "emergency", "right now", "soonest"]
         routine_signals = ["whenever", "this week", "next few days", "no rush", "not urgent"]
 
         if any(s in lower for s in urgent_signals):
