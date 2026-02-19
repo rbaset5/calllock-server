@@ -72,3 +72,34 @@ class TestSafetyPrompt:
     def test_safety_prompt_mentions_retraction(self):
         prompt = STATE_PROMPTS[State.SAFETY]
         assert "RETRACTED" in prompt or "retract" in prompt.lower()
+
+
+class TestAppointmentContextGating:
+    def test_appointment_info_hidden_in_urgency(self):
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.URGENCY
+        session.has_appointment = True
+        session.appointment_date = "2026-02-20"
+        session.appointment_time = "10:00 AM"
+        prompt = get_system_prompt(session)
+        assert "2026-02-20" not in prompt
+        assert "10:00 AM" not in prompt
+
+    def test_appointment_info_hidden_in_pre_confirm(self):
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.PRE_CONFIRM
+        session.has_appointment = True
+        session.appointment_date = "2026-02-20"
+        session.appointment_time = "10:00 AM"
+        prompt = get_system_prompt(session)
+        assert "2026-02-20" not in prompt
+
+    def test_appointment_info_visible_in_callback(self):
+        """CALLBACK is intentionally in the allowlist so the agent can mention
+        the existing appointment when wrapping up."""
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.CALLBACK
+        session.has_appointment = True
+        session.appointment_date = "2026-02-20"
+        prompt = get_system_prompt(session)
+        assert "2026-02-20" in prompt

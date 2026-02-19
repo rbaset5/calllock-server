@@ -57,7 +57,10 @@ def _build_context(session: CallSession) -> str:
         parts.append(f"Address: {session.service_address}")
     if session.zip_code:
         parts.append(f"ZIP: {session.zip_code}")
-    if session.has_appointment:
+    # Only surface appointment details in states that can act on them
+    if session.has_appointment and session.state in (
+        State.LOOKUP, State.FOLLOW_UP, State.MANAGE_BOOKING, State.CALLBACK,
+    ):
         appt = f"Caller has an existing appointment"
         if session.appointment_date:
             appt += f" on {session.appointment_date}"
