@@ -30,6 +30,11 @@ def test_session_has_call_metadata_fields():
     assert s.transcript_log == []
 
 
+def test_agent_has_responded_defaults_false():
+    session = CallSession(phone_number="+15125551234")
+    assert session.agent_has_responded is False
+
+
 def test_session_transcript_log_accumulates():
     s = CallSession(phone_number="+15125551234")
     s.transcript_log.append({"role": "agent", "content": "Hello", "timestamp": 1000.0, "state": "welcome"})

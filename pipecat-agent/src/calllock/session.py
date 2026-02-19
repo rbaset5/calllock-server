@@ -52,4 +52,5 @@ class CallSession:
     transcript_log: list = field(default_factory=list)
     turn_count: int = 0
     state_turn_count: int = 0
+    agent_has_responded: bool = False
     conversation_history: list = field(default_factory=list)
