@@ -728,3 +728,19 @@ class TestExchangeBasedTurnCounting:
         session.agent_has_responded = True
         sm.process(session, "yeah that's right")
         assert session.state == State.URGENCY
+
+
+class TestRegressionCA76a150a:
+    """Regression: call CA76a150a stalled 107s in URGENCY because 'soonest'
+    wasn't recognized. Proves urgency signals fire before reschedule detection."""
+
+    def test_soonest_with_appointment_routes_to_pre_confirm(self, sm, session):
+        """Priority: urgency signals must fire before reschedule detection.
+        Caller has an appointment but said 'soonest' — should book, not callback."""
+        session.state = State.URGENCY
+        session.has_appointment = True
+        session.appointment_date = "2026-02-19"
+        session.appointment_time = "3:45 PM"
+        sm.process(session, "I was looking for the soonest available appointment")
+        assert session.state == State.PRE_CONFIRM
+        assert session.urgency_tier == "urgent"
