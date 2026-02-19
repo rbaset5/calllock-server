@@ -268,6 +268,7 @@ class StateMachine:
         time_patterns = [
             "tomorrow", "monday", "tuesday", "wednesday", "thursday",
             "friday", "saturday", "sunday", "morning", "afternoon", "evening",
+            "following day", "next day",
         ]
         if any(p in lower for p in time_patterns):
             session.urgency_tier = "routine"

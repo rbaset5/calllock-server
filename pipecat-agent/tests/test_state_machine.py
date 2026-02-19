@@ -323,6 +323,19 @@ class TestUrgencyState:
         assert session.urgency_tier == "urgent"
         assert session.state == State.PRE_CONFIRM
 
+    def test_following_day_triggers_time_pattern(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "the following day, same time")
+        assert session.urgency_tier == "routine"
+        assert session.preferred_time == "the following day, same time"
+        assert session.state == State.PRE_CONFIRM
+
+    def test_next_day_triggers_time_pattern(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "next day would be fine")
+        assert session.urgency_tier == "routine"
+        assert session.state == State.PRE_CONFIRM
+
 
 # --- PRE_CONFIRM state ---
 
