@@ -336,6 +336,19 @@ class TestUrgencyState:
         assert session.urgency_tier == "routine"
         assert session.state == State.PRE_CONFIRM
 
+    def test_reschedule_with_appointment_routes_to_callback(self, sm, session):
+        session.state = State.URGENCY
+        session.has_appointment = True
+        action = sm.process(session, "Can I reschedule for something later?")
+        assert session.state == State.CALLBACK
+
+    def test_reschedule_without_appointment_stays_in_urgency(self, sm, session):
+        """No false positive: 'reschedule' without an existing appointment should not trigger."""
+        session.state = State.URGENCY
+        session.has_appointment = False
+        action = sm.process(session, "Can I reschedule for something later?")
+        assert session.state == State.URGENCY  # no appointment, no redirect
+
 
 # --- PRE_CONFIRM state ---
 

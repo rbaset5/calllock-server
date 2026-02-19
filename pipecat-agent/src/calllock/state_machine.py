@@ -13,6 +13,7 @@ from calllock.validation import (
     detect_safety_emergency,
     detect_high_ticket,
     detect_callback_request,
+    MANAGE_BOOKING_KEYWORDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ TRANSITIONS = {
     State.SAFETY_EXIT: set(),
     State.SERVICE_AREA: {State.DISCOVERY, State.CALLBACK},
     State.DISCOVERY: {State.URGENCY},
-    State.URGENCY: {State.PRE_CONFIRM, State.URGENCY_CALLBACK},
+    State.URGENCY: {State.PRE_CONFIRM, State.URGENCY_CALLBACK, State.CALLBACK},
     State.URGENCY_CALLBACK: set(),
     State.PRE_CONFIRM: {State.BOOKING, State.CALLBACK},
     State.BOOKING: {State.CONFIRM, State.BOOKING_FAILED},
@@ -247,6 +248,12 @@ class StateMachine:
         if session.lead_type == "high_ticket":
             _transition(session, State.URGENCY_CALLBACK)
             return Action(needs_llm=True)
+
+        # Compound request: caller wants to manage existing appointment mid-service-flow
+        if session.has_appointment:
+            if any(s in lower for s in MANAGE_BOOKING_KEYWORDS):
+                _transition(session, State.CALLBACK)
+                return Action(needs_llm=True)
 
         # Extract timing from response
         urgent_signals = ["today", "asap", "right away", "as soon as", "emergency", "right now", "soonest"]
