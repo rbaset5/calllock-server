@@ -362,3 +362,29 @@ class TestPostToolLLMTrigger:
         # so user text must be manually appended to context
         user_msgs = [m for m in processor.context.messages if m.get("role") == "user"]
         assert any("call me back" in m["content"] for m in user_msgs)
+
+
+class TestAgentHasRespondedFlag:
+    """agent_has_responded must be set when the processor captures an assistant message."""
+
+    def test_agent_response_sets_flag(self, processor):
+        """Capturing an agent response must set session.agent_has_responded."""
+        processor.session.agent_has_responded = False
+
+        # Simulate LLM adding an assistant message to context
+        processor.context.messages.append({"role": "assistant", "content": "What's your ZIP code?"})
+
+        processor._capture_agent_responses()
+
+        assert processor.session.agent_has_responded is True
+
+    def test_no_agent_response_leaves_flag(self, processor):
+        """If no new assistant messages, agent_has_responded stays unchanged."""
+        processor.session.agent_has_responded = False
+
+        # Add a user message (not assistant)
+        processor.context.messages.append({"role": "user", "content": "hello"})
+
+        processor._capture_agent_responses()
+
+        assert processor.session.agent_has_responded is False

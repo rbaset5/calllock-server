@@ -72,6 +72,12 @@ class StateMachineProcessor(FrameProcessor):
         The LLM output flows downstream (LLM → TTS → transport), bypassing
         this processor. We read agent responses from the context aggregator's
         message list instead.
+
+        NOTE: Canned TTSSpeakFrame messages (e.g. "One moment" during tool calls,
+        turn-limit escalation messages) bypass the LLM and don't appear in context,
+        so they don't set agent_has_responded. This is correct because canned speaks
+        are either terminal (call ending) or followed by an LLM response (force_llm
+        after tool-induced state transitions).
         """
         while self._context_capture_idx < len(self.context.messages):
             msg = self.context.messages[self._context_capture_idx]
@@ -82,6 +88,7 @@ class StateMachineProcessor(FrameProcessor):
                     "timestamp": _time.time(),
                     "state": self.session.state.value,
                 })
+                self.session.agent_has_responded = True
             self._context_capture_idx += 1
 
     def flush_transcript(self):
