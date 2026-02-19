@@ -123,6 +123,35 @@ class TestExchangeBasedTurnCounting:
 
         assert session.turn_count == 3  # always increments
         assert session.state_turn_count == 0  # no agent response, no state-turn increment
+
+    def test_discovery_address_fragments_dont_trigger_callback(self, sm, session):
+        """Regression: call CA4e393da — address fragments exhausted turn limit.
+
+        Real call had caller dictate address in 5 STT fragments in discovery,
+        burning through MAX_TURNS_PER_STATE and escalating to CALLBACK before
+        the agent could ask a follow-up question.
+        """
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC not cooling"
+        session.agent_has_responded = True  # agent asked for address
+
+        # Caller dictates address in 5 fragments (real Deepgram STT behavior)
+        sm.process(session, "Okay it's")
+        sm.process(session, "four three two nine")
+        sm.process(session, "Franklin Street")
+        sm.process(session, "Franklin")
+        sm.process(session, "Austin Texas")
+
+        # Should still be in DISCOVERY, NOT escalated to CALLBACK
+        assert session.state == State.DISCOVERY
+        assert session.state_turn_count == 1
+
+        # Now set address and verify progression to URGENCY
+        session.service_address = "4329 Franklin Street"
+        session.agent_has_responded = True
+        sm.process(session, "yeah that's right")
+        assert session.state == State.URGENCY
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -218,7 +247,7 @@ This test (line 596) currently calls `process()` 6 times consecutively and expec
 **Step 6: Run full state machine test suite**
 
 Run: `pytest pipecat-agent/tests/test_state_machine.py -v`
-Expected: ALL PASS. Some existing tests may need `session.agent_has_responded = True` before their first `process()` call if they rely on `state_turn_count` incrementing. Check any failures and fix by setting the flag where an agent response is implied.
+Expected: ALL PASS. Only `test_turn_limit_still_fires_within_state` (fixed in Step 5) needed updating. All other existing tests pass without modification because they either (a) test transition resets (which still reset to 0) or (b) don't assert on `state_turn_count` values.
 
 **Step 7: Commit**
 
@@ -270,7 +299,7 @@ def test_no_agent_response_leaves_flag(processor):
     assert processor.session.agent_has_responded is False
 ```
 
-**Note:** Check how the `processor` fixture is set up in the existing test file. You may need to adapt the fixture usage. The key is that `processor.context.messages` must be accessible and `processor._capture_agent_responses()` must be callable.
+**Note:** The existing `processor` fixture (test_processor.py:14-36) creates a real `StateMachineProcessor` with `MagicMock` context and `AsyncMock` tools. `processor.context.messages` is a regular list and `processor._capture_agent_responses()` is directly callable. These tests fit the existing fixture without modification.
 
 **Step 2: Run test to verify it fails**
 
@@ -314,6 +343,24 @@ In `pipecat-agent/src/calllock/processor.py`, modify `_capture_agent_responses()
 
 One line added: `self.session.agent_has_responded = True` inside the `if` block.
 
+Also add a documenting comment above the method explaining the design assumption:
+
+```python
+    def _capture_agent_responses(self):
+        """Capture new assistant messages from LLM context to transcript log.
+
+        The LLM output flows downstream (LLM → TTS → transport), bypassing
+        this processor. We read agent responses from the context aggregator's
+        message list instead.
+
+        NOTE: Canned TTSSpeakFrame messages (e.g. "One moment" during tool calls,
+        turn-limit escalation messages) bypass the LLM and don't appear in context,
+        so they don't set agent_has_responded. This is correct because canned speaks
+        are either terminal (call ending) or followed by an LLM response (force_llm
+        after tool-induced state transitions).
+        """
+```
+
 **Step 4: Run tests to verify they pass**
 
 Run: `pytest pipecat-agent/tests/test_processor.py -v`
@@ -339,7 +386,7 @@ has spoken, so the next user frame starts a new exchange."
 **Step 1: Run full test suite**
 
 Run: `pytest pipecat-agent/tests/ -v`
-Expected: ALL PASS (166+ tests). If any existing tests fail because they relied on `state_turn_count` always incrementing, fix them by setting `session.agent_has_responded = True` before the `process()` calls where an agent response is implied.
+Expected: ALL PASS (166+ tests). All existing tests should pass — the only test that needed updating (`test_turn_limit_still_fires_within_state`) was fixed in Task 2.
 
 **Step 2: Verify the exact scenario from the bug**
 
