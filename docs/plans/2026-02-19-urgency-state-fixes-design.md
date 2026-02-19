@@ -27,13 +27,13 @@ Add "soonest" to `urgent_signals` in `_handle_urgency()`:
 urgent_signals = ["today", "asap", "right away", "as soon as", "emergency", "right now", "soonest"]
 ```
 
-Add "following" and "next day" to `time_patterns`:
+Add "following day" and "next day" to `time_patterns`:
 
 ```python
 time_patterns = [
     "tomorrow", "monday", "tuesday", "wednesday", "thursday",
     "friday", "saturday", "sunday", "morning", "afternoon", "evening",
-    "following", "next day",
+    "following day", "next day",
 ]
 ```
 
@@ -45,25 +45,26 @@ Add CALLBACK to URGENCY transitions:
 State.URGENCY: {State.PRE_CONFIRM, State.URGENCY_CALLBACK, State.CALLBACK},
 ```
 
-Add reschedule detection at the top of `_handle_urgency()`, before urgency signal checks:
+Add reschedule detection in `_handle_urgency()`, **after** existing callback-request and high-ticket checks (preserves their priority):
 
 ```python
 # Compound request: caller wants to manage existing appointment mid-service-flow
+# Reuses MANAGE_BOOKING_KEYWORDS from validation.py (DRY)
 if session.has_appointment:
-    reschedule_signals = ["reschedule", "cancel", "move my appointment", "change my appointment"]
-    if any(s in lower for s in reschedule_signals):
+    if any(s in lower for s in MANAGE_BOOKING_KEYWORDS):
         _transition(session, State.CALLBACK)
         return Action(needs_llm=True)
 ```
 
-Guard: only fires when `session.has_appointment` is True (set by lookup_caller result). No false positives for callers without appointments.
+Guard: only fires when `session.has_appointment` is True (set by lookup_caller result). No false positives for callers without appointments. Uses `MANAGE_BOOKING_KEYWORDS` (already imported from validation.py) to stay DRY with intent classification.
 
 ### 3. Suppress Appointment Context Past Discovery — `prompts.py`
 
 In `_build_context()`, restrict appointment info to states where it's actionable:
 
 ```python
-if session.has_appointment and session.state in (State.LOOKUP, State.FOLLOW_UP, State.MANAGE_BOOKING):
+# Update this set when adding states that should show appointment info
+if session.has_appointment and session.state in (State.LOOKUP, State.FOLLOW_UP, State.MANAGE_BOOKING, State.CALLBACK):
     appt = f"Caller has an existing appointment"
     if session.appointment_date:
         appt += f" on {session.appointment_date}"
@@ -76,13 +77,20 @@ URGENCY, PRE_CONFIRM, BOOKING, and CONFIRM never see appointment context. The LL
 
 ### 4. Tests
 
-New tests:
+New state machine tests:
 - `test_soonest_triggers_urgent` — "soonest available" → PRE_CONFIRM with urgency_tier "urgent"
 - `test_following_day_triggers_time_pattern` — "the following day" → PRE_CONFIRM with preferred_time set
-- `test_reschedule_in_urgency_routes_to_callback` — caller with appointment says "reschedule" in URGENCY → CALLBACK
+- `test_next_day_triggers_time_pattern` — "next day" → PRE_CONFIRM
+- `test_reschedule_with_appointment_routes_to_callback` — caller with appointment says "reschedule" in URGENCY → CALLBACK
+- `test_reschedule_without_appointment_stays_in_urgency` — false-positive guard
 
-Updated tests:
-- Any test asserting `_build_context()` includes appointment info must account for the state filter.
+New prompt tests:
+- `test_appointment_info_hidden_in_urgency` — appointment context suppressed in URGENCY
+- `test_appointment_info_hidden_in_pre_confirm` — appointment context suppressed in PRE_CONFIRM
+- `test_appointment_info_visible_in_callback` — appointment context intentionally visible in CALLBACK
+
+Regression test:
+- `test_soonest_with_appointment_still_routes_to_pre_confirm` — proves urgency signals fire before reschedule detection (exact CA76a150a scenario)
 
 ## Files Modified
 

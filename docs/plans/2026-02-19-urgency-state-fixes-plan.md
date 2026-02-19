@@ -89,7 +89,7 @@ def test_next_day_triggers_time_pattern(self, sm, session):
 **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_state_machine.py::TestUrgencyState::test_following_day_triggers_time_pattern tests/test_state_machine.py::TestUrgencyState::test_next_day_triggers_time_pattern -v`
-Expected: FAIL — "following" and "next day" aren't in time_patterns.
+Expected: FAIL — "following day" and "next day" aren't in time_patterns.
 
 **Step 3: Add keywords to time_patterns**
 
@@ -106,7 +106,7 @@ time_patterns = [
 time_patterns = [
     "tomorrow", "monday", "tuesday", "wednesday", "thursday",
     "friday", "saturday", "sunday", "morning", "afternoon", "evening",
-    "following", "next day",
+    "following day", "next day",
 ]
 ```
 
@@ -166,20 +166,38 @@ State.URGENCY: {State.PRE_CONFIRM, State.URGENCY_CALLBACK},
 State.URGENCY: {State.PRE_CONFIRM, State.URGENCY_CALLBACK, State.CALLBACK},
 ```
 
-In `_handle_urgency()`, add reschedule detection after `lower = text.lower()` and before the callback request check (around line 240):
+In `_handle_urgency()`, add reschedule detection **after** the existing callback-request and high-ticket checks (preserves their priority). Add `MANAGE_BOOKING_KEYWORDS` to the existing import from `calllock.validation`:
 
 ```python
-def _handle_urgency(self, session: CallSession, text: str) -> Action:
-    lower = text.lower()
+# At top of file, update existing import:
+from calllock.validation import (
+    validate_zip,
+    validate_name,
+    validate_address,
+    is_service_area,
+    classify_intent,
+    detect_safety_emergency,
+    detect_high_ticket,
+    detect_callback_request,
+    MANAGE_BOOKING_KEYWORDS,  # NEW — reuse for reschedule detection
+)
+```
 
-    # Compound request: caller wants to manage existing appointment mid-service-flow
-    if session.has_appointment:
-        reschedule_signals = ["reschedule", "cancel my", "move my appointment", "change my appointment"]
-        if any(s in lower for s in reschedule_signals):
-            _transition(session, State.CALLBACK)
+In `_handle_urgency()`, add after the high-ticket check (around line 249) and before urgent_signals:
+
+```python
+        # High-ticket leads go to callback
+        if session.lead_type == "high_ticket":
+            _transition(session, State.URGENCY_CALLBACK)
             return Action(needs_llm=True)
 
-    # Check for explicit callback request (existing code continues below)
+        # Compound request: caller wants to manage existing appointment mid-service-flow
+        if session.has_appointment:
+            if any(s in lower for s in MANAGE_BOOKING_KEYWORDS):
+                _transition(session, State.CALLBACK)
+                return Action(needs_llm=True)
+
+        # Extract timing from response (existing code continues below)
 ```
 
 **Step 4: Run tests to verify they pass**
@@ -231,6 +249,17 @@ def test_appointment_info_hidden_in_pre_confirm():
     session.appointment_time = "10:00 AM"
     prompt = get_system_prompt(session)
     assert "2026-02-20" not in prompt
+
+
+def test_appointment_info_visible_in_callback():
+    """CALLBACK is intentionally in the allowlist so the agent can mention
+    the existing appointment when wrapping up."""
+    session = CallSession(phone_number="+15125551234")
+    session.state = State.CALLBACK
+    session.has_appointment = True
+    session.appointment_date = "2026-02-20"
+    prompt = get_system_prompt(session)
+    assert "2026-02-20" in prompt
 ```
 
 **Step 2: Run tests to verify they fail**
@@ -253,6 +282,7 @@ if session.has_appointment:
     parts.append(appt)
 
 # After:
+# Update this set when adding states that should show appointment info
 if session.has_appointment and session.state in (
     State.LOOKUP, State.FOLLOW_UP, State.MANAGE_BOOKING, State.CALLBACK,
 ):
@@ -292,36 +322,34 @@ git commit -m "fix: suppress appointment context in states that cannot act on it
 
 **Step 1: Write the regression test**
 
-Add a new test class at the end of `tests/test_state_machine.py`:
+Add a new test class at the end of `tests/test_state_machine.py`. This is the one test
+that covers the *exact* CA76a150a scenario — a caller with an existing appointment who
+says "soonest available" should match urgency signals (→ PRE_CONFIRM), NOT get caught
+by reschedule detection (→ CALLBACK). This proves the priority ordering is correct.
+
+Individual signal and reschedule tests are already covered by Tasks 1-3.
 
 ```python
 class TestRegressionCA76a150a:
-    """Regression test for call CA76a150a: caller says 'soonest available'
-    then asks to reschedule existing appointment in URGENCY state."""
+    """Regression: call CA76a150a stalled 107s in URGENCY because 'soonest'
+    wasn't recognized. Proves urgency signals fire before reschedule detection."""
 
-    def test_soonest_available_reaches_pre_confirm(self, sm, session):
-        """The primary fix: 'soonest available' should route to PRE_CONFIRM
-        instead of leaving the caller stuck in URGENCY."""
-        session.state = State.URGENCY
-        sm.process(session, "I was looking for the soonest available appointment")
-        assert session.state == State.PRE_CONFIRM
-        assert session.urgency_tier == "urgent"
-
-    def test_reschedule_after_urgency_prompt_routes_to_callback(self, sm, session):
-        """Secondary fix: if the agent mentions the appointment and the caller
-        asks to reschedule, route to CALLBACK immediately."""
+    def test_soonest_with_appointment_routes_to_pre_confirm(self, sm, session):
+        """Priority: urgency signals must fire before reschedule detection.
+        Caller has an appointment but said 'soonest' — should book, not callback."""
         session.state = State.URGENCY
         session.has_appointment = True
         session.appointment_date = "2026-02-19"
         session.appointment_time = "3:45 PM"
-        sm.process(session, "Can I reschedule for something later?")
-        assert session.state == State.CALLBACK
+        sm.process(session, "I was looking for the soonest available appointment")
+        assert session.state == State.PRE_CONFIRM
+        assert session.urgency_tier == "urgent"
 ```
 
-**Step 2: Run regression tests**
+**Step 2: Run regression test**
 
 Run: `pytest tests/test_state_machine.py::TestRegressionCA76a150a -v`
-Expected: PASS (both tests should already pass from Tasks 1 and 3).
+Expected: PASS (urgency signals fire before reschedule detection).
 
 **Step 3: Run full suite one final time**
 
@@ -332,5 +360,5 @@ Expected: All tests pass.
 
 ```bash
 git add tests/test_state_machine.py
-git commit -m "test: regression test for call CA76a150a urgency state stall"
+git commit -m "test: regression test for call CA76a150a priority ordering"
 ```
