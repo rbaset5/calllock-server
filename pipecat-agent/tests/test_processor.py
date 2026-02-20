@@ -33,6 +33,7 @@ def processor():
     proc.push_frame = AsyncMock()
     # Mock _run_extraction to avoid LLM calls
     proc._run_extraction = AsyncMock()
+    proc.BUFFER_DEBOUNCE_S = 0.05
     return proc
 
 
@@ -210,7 +211,7 @@ class TestContextPreservation:
 
         Before the fix, needs_llm=False meant the frame was NOT pushed
         and user text was manually appended. Now force_llm=True triggers
-        the push, and the context aggregator handles the rest.
+        buffer mode, and after debounce the frame is pushed downstream.
         """
         processor.context.messages = [
             {"role": "system", "content": "test"},
@@ -220,7 +221,10 @@ class TestContextPreservation:
         frame = TranscriptionFrame(text="my AC is broken", user_id="", timestamp="")
         await processor._handle_transcription(frame)
 
-        # With force_llm fix, the TranscriptionFrame is pushed downstream
+        # Wait for buffer debounce to flush
+        await asyncio.sleep(processor.BUFFER_DEBOUNCE_S + 0.2)
+
+        # With force_llm fix, the TranscriptionFrame is pushed downstream after debounce
         pushed_types = [type(call.args[0]).__name__ for call in processor.push_frame.call_args_list]
         assert "TranscriptionFrame" in pushed_types, (
             f"TranscriptionFrame should be pushed downstream after tool-driven state transition. "
@@ -268,6 +272,7 @@ class TestPostToolLLMTrigger:
         Bug: lookup returns needs_llm=False, so the LLM was never
         triggered after the tool result transitioned to SAFETY.
         This caused 26s of dead air in production (call CAd2b972dc).
+        Now force_llm enters buffer mode; LLM is triggered after debounce.
         """
         processor.context.messages = [
             {"role": "system", "content": "test"},
@@ -277,10 +282,13 @@ class TestPostToolLLMTrigger:
         frame = TranscriptionFrame(text="my AC is broken", user_id="", timestamp="")
         await processor._handle_transcription(frame)
 
+        # Wait for buffer debounce to flush
+        await asyncio.sleep(processor.BUFFER_DEBOUNCE_S + 0.2)
+
         pushed_types = [type(call.args[0]).__name__ for call in processor.push_frame.call_args_list]
 
-        # TTSSpeakFrame ("One moment.") should be there
-        assert "TTSSpeakFrame" in pushed_types, f"Expected speak frame, got: {pushed_types}"
+        # No canned speak — lookup runs silently so it doesn't interrupt the caller
+        assert "TTSSpeakFrame" not in pushed_types, f"Unexpected speak frame: {pushed_types}"
 
         # After tool completes and state transitions, a frame must trigger LLM
         llm_trigger_types = {"TranscriptionFrame", "LLMMessagesFrame"}
@@ -292,7 +300,7 @@ class TestPostToolLLMTrigger:
     @pytest.mark.asyncio
     async def test_booking_triggers_llm_after_confirmation(self, processor):
         """BOOKING → (tool) → CONFIRM: after book_service returns success,
-        the LLM must generate a confirmation message."""
+        the LLM must generate a confirmation message (after buffer debounce)."""
         processor.session.state = State.BOOKING
         processor.session.booking_attempted = False
         processor.tools.book_service.return_value = {
@@ -307,6 +315,10 @@ class TestPostToolLLMTrigger:
         await processor._handle_transcription(frame)
 
         assert processor.session.state == State.CONFIRM
+
+        # Wait for buffer debounce to flush
+        await asyncio.sleep(processor.BUFFER_DEBOUNCE_S + 0.2)
+
         pushed_types = [type(call.args[0]).__name__ for call in processor.push_frame.call_args_list]
         llm_trigger_types = {"TranscriptionFrame", "LLMMessagesFrame"}
         assert llm_trigger_types & set(pushed_types), (
@@ -317,7 +329,7 @@ class TestPostToolLLMTrigger:
     @pytest.mark.asyncio
     async def test_lookup_failure_still_triggers_llm(self, processor):
         """When V2 backend returns failure dict, state should still
-        transition and LLM should still respond (review T1)."""
+        transition and LLM should still respond (after buffer debounce)."""
         processor.tools.lookup_caller.return_value = {
             "found": False, "message": "V2 backend unavailable"
         }
@@ -328,6 +340,9 @@ class TestPostToolLLMTrigger:
 
         frame = TranscriptionFrame(text="my AC is broken", user_id="", timestamp="")
         await processor._handle_transcription(frame)
+
+        # Wait for buffer debounce to flush
+        await asyncio.sleep(processor.BUFFER_DEBOUNCE_S + 0.2)
 
         assert processor.session.state == State.SAFETY
         pushed_types = [type(c.args[0]).__name__ for c in processor.push_frame.call_args_list]
@@ -388,3 +403,56 @@ class TestAgentHasRespondedFlag:
         processor._capture_agent_responses()
 
         assert processor.session.agent_has_responded is False
+
+
+class TestPostToolDebounce:
+    """After tool transitions (force_llm), buffer fragments before triggering LLM."""
+
+    @pytest.mark.asyncio
+    async def test_force_llm_enters_buffer_mode(self, processor):
+        """After WELCOME→LOOKUP→SAFETY, processor should NOT push immediately."""
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+            {"role": "assistant", "content": "Greeting"},
+        ]
+        frame = TranscriptionFrame(text="my AC is broken", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+        pushed_types = [type(c.args[0]).__name__ for c in processor.push_frame.call_args_list]
+        assert "TranscriptionFrame" not in pushed_types, (
+            f"TranscriptionFrame pushed immediately — should be buffered. Got: {pushed_types}"
+        )
+        assert processor._buffer_mode is True
+
+    @pytest.mark.asyncio
+    async def test_buffer_flushes_after_debounce(self, processor):
+        """After debounce timeout, buffered text should be pushed to LLM."""
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+            {"role": "assistant", "content": "Greeting"},
+        ]
+        frame = TranscriptionFrame(text="my AC is broken", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+        await asyncio.sleep(processor.BUFFER_DEBOUNCE_S + 0.2)
+        pushed_types = [type(c.args[0]).__name__ for c in processor.push_frame.call_args_list]
+        assert "TranscriptionFrame" in pushed_types, (
+            f"TranscriptionFrame not pushed after debounce. Got: {pushed_types}"
+        )
+        assert processor._buffer_mode is False
+
+    @pytest.mark.asyncio
+    async def test_buffer_accumulates_fragments(self, processor):
+        """Multiple fragments during buffer mode should be concatenated on flush."""
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+            {"role": "assistant", "content": "Greeting"},
+        ]
+        f1 = TranscriptionFrame(text="my AC is broken", user_id="", timestamp="")
+        await processor._handle_transcription(f1)
+        f2 = TranscriptionFrame(text="it's blowing warm air", user_id="u1", timestamp="t1")
+        await processor._handle_transcription(f2)
+        await asyncio.sleep(processor.BUFFER_DEBOUNCE_S + 0.2)
+        pushed_frames = [c.args[0] for c in processor.push_frame.call_args_list]
+        transcription_frames = [f for f in pushed_frames if isinstance(f, TranscriptionFrame)]
+        assert len(transcription_frames) == 1
+        assert "my AC is broken" in transcription_frames[0].text
+        assert "blowing warm air" in transcription_frames[0].text

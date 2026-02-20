@@ -38,6 +38,9 @@ class StateMachineProcessor(FrameProcessor):
     6. After LLM generates text, run extraction to update session fields
     """
 
+    BUFFER_DEBOUNCE_S = 1.5
+    BUFFER_MAX_S = 5.0
+
     def __init__(
         self,
         session: CallSession,
@@ -52,6 +55,11 @@ class StateMachineProcessor(FrameProcessor):
         self.tools = tools
         self.context = context
         self._context_capture_idx = 1  # Skip system message at index 0
+        self._buffer_mode = False
+        self._buffer_texts: list[str] = []
+        self._buffer_timer: asyncio.Task | None = None
+        self._buffer_frame: TranscriptionFrame | None = None
+        self._buffer_start_time: float = 0.0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -95,6 +103,66 @@ class StateMachineProcessor(FrameProcessor):
         """Capture any remaining agent responses. Call before post-call processing."""
         self._capture_agent_responses()
 
+    def _start_buffer(self, text: str, frame: TranscriptionFrame):
+        """Enter buffer mode after a tool transition."""
+        self._buffer_mode = True
+        self._buffer_texts = [text]
+        self._buffer_frame = frame
+        self._buffer_start_time = time.time()
+        self._reset_buffer_timer()
+
+    def _reset_buffer_timer(self):
+        """Reset the debounce timer."""
+        if self._buffer_timer and not self._buffer_timer.done():
+            self._buffer_timer.cancel()
+        self._buffer_timer = asyncio.create_task(self._buffer_debounce_wait())
+
+    async def _buffer_debounce_wait(self):
+        """Wait for debounce period, then flush."""
+        await asyncio.sleep(self.BUFFER_DEBOUNCE_S)
+        await self._flush_buffer()
+
+    async def _flush_buffer(self):
+        """Push accumulated fragments to LLM as one concatenated message."""
+        if not self._buffer_mode:
+            return
+        self._buffer_mode = False
+        combined_text = " ".join(self._buffer_texts)
+
+        # Run state machine on concatenated text (skipped during buffer mode)
+        action = self.machine.process(self.session, combined_text)
+
+        # Update system prompt for current state
+        self.context.messages[0]["content"] = get_system_prompt(self.session)
+
+        # Run extraction if applicable
+        if self.session.state.value in ("service_area", "discovery", "urgency", "pre_confirm"):
+            asyncio.create_task(self._safe_extraction())
+
+        combined_frame = TranscriptionFrame(
+            text=combined_text,
+            user_id=self._buffer_frame.user_id if self._buffer_frame else "",
+            timestamp=self._buffer_frame.timestamp if self._buffer_frame else "",
+        )
+        text_display = f"'{combined_text[:80]}...'" if len(combined_text) > 80 else f"'{combined_text}'"
+        logger.info(f"[{self.session.state.value}] Buffer flush: {len(self._buffer_texts)} fragments → {text_display}")
+        self._buffer_texts = []
+        self._buffer_frame = None
+        if self._buffer_timer and not self._buffer_timer.done():
+            self._buffer_timer.cancel()
+        self._buffer_timer = None
+
+        # Handle end_call from flushed text (e.g., safety emergency)
+        if action.end_call:
+            if action.needs_llm:
+                await self.push_frame(combined_frame, FrameDirection.DOWNSTREAM)
+                asyncio.create_task(self._delayed_end_call(delay=3.0))
+            else:
+                await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+            return
+
+        await self.push_frame(combined_frame, FrameDirection.DOWNSTREAM)
+
     async def _handle_transcription(self, frame: TranscriptionFrame):
         t_start = time.time()
 
@@ -115,10 +183,21 @@ class StateMachineProcessor(FrameProcessor):
             "state": self.session.state.value,
         })
 
+        # Buffer mode: skip state machine, just accumulate text
+        if self._buffer_mode:
+            self._buffer_texts.append(text)
+            self._buffer_frame = frame
+            if time.time() - self._buffer_start_time >= self.BUFFER_MAX_S:
+                logger.info(f"[{self.session.state.value}] Buffer max time reached, flushing")
+                await self._flush_buffer()
+            else:
+                self._reset_buffer_timer()
+            return
+
         # Run state machine
         action = self.machine.process(self.session, text)
 
-        # Speak canned message immediately (e.g., "One moment" before a slow tool call)
+        # Speak canned message immediately
         if action.speak:
             await self.push_frame(TTSSpeakFrame(text=action.speak), FrameDirection.DOWNSTREAM)
 
@@ -133,22 +212,26 @@ class StateMachineProcessor(FrameProcessor):
         # Update system prompt for current state
         self.context.messages[0]["content"] = get_system_prompt(self.session)
 
-        # Run extraction in background — results only matter for the next turn
+        # Run extraction in background
         if self.session.state.value in ("service_area", "discovery", "urgency", "pre_confirm"):
             asyncio.create_task(self._safe_extraction())
 
         # End the call if needed
         if action.end_call:
             if action.needs_llm or force_llm:
-                # Let LLM generate a farewell, then end after TTS finishes
                 await self.push_frame(frame, FrameDirection.DOWNSTREAM)
                 asyncio.create_task(self._delayed_end_call(delay=3.0))
             else:
                 await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
             return
 
-        # Pass transcription downstream if LLM should generate response
-        if action.needs_llm or force_llm:
+        # Post-tool debounce: buffer fragments so caller finishes their thought
+        if force_llm:
+            self._start_buffer(text, frame)
+            return
+
+        # Normal path: pass transcription downstream if LLM should generate response
+        if action.needs_llm:
             t_push = time.time()
             logger.info(
                 f"[{self.session.state.value}] Processing: {(t_push - t_start)*1000:.0f}ms "
@@ -157,8 +240,6 @@ class StateMachineProcessor(FrameProcessor):
             await self.push_frame(frame, FrameDirection.DOWNSTREAM)
         else:
             # Preserve user text in LLM context even when LLM won't respond.
-            # Without this, user speech during WELCOME/LOOKUP is invisible
-            # to the LLM on its next turn.
             self.context.messages.append({"role": "user", "content": text})
 
     async def _delayed_end_call(self, delay: float = 3.0):
