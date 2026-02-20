@@ -45,7 +45,7 @@ def _derive_booking_status(session: CallSession) -> str:
     """Derive booking_status from session state."""
     if session.booking_confirmed:
         return "confirmed"
-    if session.state == State.CALLBACK and session.caller_confirmed:
+    if session.booking_attempted:
         return "attempted_failed"
     return "not_requested"
 

@@ -74,6 +74,17 @@ class TestBuildJobPayload:
         assert payload.get("scheduled_at") is None
         assert payload["booking_status"] == "not_requested"
 
+    def test_booking_failed_with_attempt_is_attempted_failed(self):
+        """When booking was attempted but failed, status should be 'attempted_failed' not 'not_requested'."""
+        s = CallSession(phone_number="+15125551234")
+        s.call_sid = "CA_test_booking_fail"
+        s.start_time = 1000.0
+        s.state = State.BOOKING_FAILED
+        s.booking_attempted = True
+        s.caller_confirmed = True
+        payload = build_job_payload(s, end_time=1015.0, user_email="owner@test.com")
+        assert payload["booking_status"] == "attempted_failed"
+
     def test_includes_transcript(self, completed_session):
         payload = build_job_payload(completed_session, end_time=1015.0, user_email="owner@test.com")
         assert "Agent:" in payload["call_transcript"]

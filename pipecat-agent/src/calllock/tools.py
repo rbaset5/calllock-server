@@ -84,11 +84,18 @@ class V2Client:
             resp = await self._client.post(
                 "/webhook/retell/book_appointment",
                 json={
-                    "customer_name": customer_name,
-                    "customer_phone": phone,
-                    "issue_description": problem,
-                    "service_address": address,
-                    "preferred_time": preferred_time,
+                    "call": {
+                        "call_id": "pipecat_call",
+                        "from_number": phone,
+                        "metadata": {},
+                    },
+                    "args": {
+                        "customer_name": customer_name,
+                        "customer_phone": phone,
+                        "issue_description": problem,
+                        "service_address": address,
+                        "preferred_time": preferred_time,
+                    },
                 },
             )
             resp.raise_for_status()

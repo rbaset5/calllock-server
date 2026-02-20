@@ -49,6 +49,25 @@ class TestBookServiceEndpoint:
             assert route.called
             assert result["booked"] is True
 
+    @pytest.mark.asyncio
+    async def test_sends_retell_webhook_format(self):
+        """book_service must wrap payload in { call, args } like all other V2Client methods."""
+        import json
+        with respx.mock:
+            client = V2Client(base_url=BASE_URL)
+            route = respx.post(f"{BASE_URL}/webhook/retell/book_appointment").mock(
+                return_value=httpx.Response(200, json={"booked": True})
+            )
+            await client.book_service(
+                customer_name="Jonas", problem="AC broken", address="4211 Cronkite Rd",
+                preferred_time="soonest", phone="+12487391087"
+            )
+            body = json.loads(route.calls[0].request.content)
+            assert "call" in body, "Payload must have 'call' key (Retell webhook format)"
+            assert "args" in body, "Payload must have 'args' key (Retell webhook format)"
+            assert body["call"]["from_number"] == "+12487391087"
+            assert body["args"]["customer_name"] == "Jonas"
+
 
 @pytest.mark.asyncio
 async def test_lookup_caller_returns_result():
