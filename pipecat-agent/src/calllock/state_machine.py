@@ -150,7 +150,7 @@ class StateMachine:
             return Action(needs_llm=True)
         # All service intents (service, follow_up, manage_booking) go through lookup first
         _transition(session, State.LOOKUP)
-        return Action(call_tool="lookup_caller", speak="One moment.", needs_llm=False)
+        return Action(call_tool="lookup_caller", needs_llm=False)
 
     def _handle_non_service(self, session: CallSession, text: str) -> Action:
         lower = text.lower()

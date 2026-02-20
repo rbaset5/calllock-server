@@ -78,7 +78,7 @@ async def create_pipeline(websocket: WebSocket):
                 params=VADParams(
                     confidence=0.85,   # Higher threshold to ignore TV/background noise
                     start_secs=0.4,    # Keep at 0.4 for 8kHz telephone noise filtering
-                    stop_secs=0.2,     # Was 0.3 — Smart Turn decides when turn is complete
+                    stop_secs=0.5,     # Was 0.2 — give callers natural pause room (300-500ms typical)
                     min_volume=0.8,    # Ignore quieter sounds (TV, ambient noise)
                 ),
             ),
