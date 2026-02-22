@@ -1,0 +1,94 @@
+[
+  {
+    "id": "welcome_service_intent",
+    "state": "welcome",
+    "session": {},
+    "conversation": [
+      {"role": "assistant", "content": "Thanks for calling ACE Cooling, how can I help you?"},
+      {"role": "user", "content": "Yeah hi, my AC stopped working this morning"}
+    ],
+    "notes": "Standard service call opening. Should detect intent, say pulling up account."
+  },
+  {
+    "id": "welcome_frustrated_caller",
+    "state": "welcome",
+    "session": {},
+    "conversation": [
+      {"role": "assistant", "content": "Thanks for calling ACE Cooling, how can I help you?"},
+      {"role": "user", "content": "I've been trying to call you guys all day, nobody picks up, my house is 90 degrees"}
+    ],
+    "notes": "Frustrated caller. Should acknowledge frustration, not be cheerful."
+  },
+  {
+    "id": "safety_clear_no",
+    "state": "safety",
+    "session": {"problem_description": "AC blowing warm air"},
+    "conversation": [
+      {"role": "user", "content": "No, nothing like that"}
+    ],
+    "notes": "Simple safety clear. Should be very brief: 'Okay, just had to check.'"
+  },
+  {
+    "id": "safety_ambiguous",
+    "state": "safety",
+    "session": {"problem_description": "Furnace making noise"},
+    "conversation": [
+      {"role": "user", "content": "Well I mean the gas heater is on but I don't smell anything weird"}
+    ],
+    "notes": "Ambiguous safety response. Should ask one clarifying follow-up."
+  },
+  {
+    "id": "discovery_need_name",
+    "state": "discovery",
+    "session": {"zip_code": "78745", "customer_name": "", "problem_description": "", "service_address": ""},
+    "conversation": [
+      {"role": "user", "content": "Yeah my AC's been blowing warm since yesterday morning"}
+    ],
+    "notes": "Has ZIP, missing everything else. Should paraphrase problem, ask for name next."
+  },
+  {
+    "id": "discovery_need_address",
+    "state": "discovery",
+    "session": {"zip_code": "78745", "customer_name": "Maria", "problem_description": "Cooling not engaging", "service_address": ""},
+    "conversation": [
+      {"role": "user", "content": "It's been like this for two days now"}
+    ],
+    "notes": "Has name and problem. Should ask for street address. Should NOT re-ask problem."
+  },
+  {
+    "id": "urgency_asap",
+    "state": "urgency",
+    "session": {"customer_name": "Jonas", "problem_description": "AC not cooling", "service_address": "4210 S Lamar"},
+    "conversation": [
+      {"role": "user", "content": "As soon as possible, it's brutal in here"}
+    ],
+    "notes": "Clear urgent timing. Should NOT ask about timing again. Should NOT say time 'works'."
+  },
+  {
+    "id": "urgency_unclear",
+    "state": "urgency",
+    "session": {"customer_name": "Tom", "problem_description": "Thermostat not responding", "service_address": "1100 Congress Ave"},
+    "conversation": [
+      {"role": "user", "content": "Yeah whenever you can get someone out here"}
+    ],
+    "notes": "Flexible timing. Should confirm routine-ish without promising availability."
+  },
+  {
+    "id": "pre_confirm_readback",
+    "state": "pre_confirm",
+    "session": {"customer_name": "Sarah", "problem_description": "Water leak from AC unit", "service_address": "2501 Lake Austin Blvd", "zip_code": "78703", "preferred_time": "tomorrow morning"},
+    "conversation": [
+      {"role": "user", "content": "Yep that's everything"}
+    ],
+    "notes": "All info present. Should read back and ask for confirmation. Concise."
+  },
+  {
+    "id": "discovery_verbose_trap",
+    "state": "discovery",
+    "session": {"zip_code": "78748", "customer_name": "Dave", "problem_description": "", "service_address": ""},
+    "conversation": [
+      {"role": "user", "content": "So basically what happened is the outdoor unit started making this loud banging noise about three days ago and then yesterday it just completely stopped and now it's blowing warm air and my wife is pregnant and we really need this fixed"}
+    ],
+    "notes": "Long caller utterance. Agent must NOT match length. Should paraphrase briefly, ask for address."
+  }
+]
