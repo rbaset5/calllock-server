@@ -30,3 +30,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "eval: LLM tone quality evaluation tests (require OPENAI_API_KEY, run with -m eval)",
+]
