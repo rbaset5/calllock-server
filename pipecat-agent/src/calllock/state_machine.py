@@ -13,6 +13,7 @@ from calllock.validation import (
     detect_safety_emergency,
     detect_high_ticket,
     detect_callback_request,
+    match_any_keyword,
     MANAGE_BOOKING_KEYWORDS,
 )
 
@@ -68,6 +69,39 @@ STATE_TOOLS = {
     State.CONFIRM: ["end_call"],
     State.CALLBACK: ["create_callback", "send_sales_lead_alert", "end_call"],
 }
+
+# Module-level keyword constants (moved from handler method bodies)
+SCHEDULE_SIGNALS = frozenset({"yes", "yeah", "schedule", "book", "sure", "go ahead"})
+NEW_ISSUE_SIGNALS = frozenset({"new issue", "something else", "different problem", "also", "another"})
+NO_SIGNALS = frozenset({
+    "no", "nope", "nah", "nothing like that", "we're fine",
+    "all good", "just not cooling", "just not heating",
+})
+URGENT_SIGNALS = frozenset({"today", "asap", "right away", "as soon as", "emergency", "right now", "soonest"})
+ROUTINE_SIGNALS = frozenset({"whenever", "this week", "next few days", "no rush", "not urgent"})
+TIME_PATTERNS = frozenset({
+    "tomorrow", "monday", "tuesday", "wednesday", "thursday",
+    "friday", "saturday", "sunday", "morning", "afternoon", "evening",
+    "following day", "next day",
+})
+YES_SIGNALS = frozenset({
+    "yes", "yeah", "yep", "sounds right", "sounds good",
+    "correct", "that's right", "go ahead",
+})
+
+# Terminal state canned responses — bypass LLM entirely
+TERMINAL_SCRIPTS = {
+    State.CALLBACK: "I'll have someone from the team call you back within the hour. Is this the best number to reach you?",
+    State.BOOKING_FAILED: "I wasn't able to lock in that time. Let me have someone call you back to get you scheduled.",
+    State.SAFETY_EXIT: "This is a safety emergency. Leave the house right now and call 911 from outside. Don't flip any light switches on the way out. Stay safe.",
+}
+
+TERMINAL_SCOPED_PROMPT = """You are briefly answering a question during a call wrap-up for ACE Cooling.
+Answer in one sentence maximum.
+NEVER mention scheduling, appointments, availability, booking, or next steps.
+NEVER offer to help with their service issue."""
+
+BOOKING_LANGUAGE = frozenset({"appointment", "schedule", "book", "tech out", "available", "slot", "open"})
 
 
 WORD_TO_DIGIT = {
@@ -153,10 +187,7 @@ class StateMachine:
         return Action(call_tool="lookup_caller", needs_llm=False)
 
     def _handle_non_service(self, session: CallSession, text: str) -> Action:
-        lower = text.lower()
-        # If they want to schedule after hearing pricing
-        schedule_signals = ["yes", "yeah", "schedule", "book", "sure", "go ahead"]
-        if any(s in lower for s in schedule_signals):
+        if match_any_keyword(text, SCHEDULE_SIGNALS):
             _transition(session, State.SAFETY)
             return Action(needs_llm=True)
         return Action(needs_llm=True)
@@ -165,41 +196,27 @@ class StateMachine:
         return Action(call_tool="lookup_caller", needs_llm=False)
 
     def _handle_follow_up(self, session: CallSession, text: str) -> Action:
-        lower = text.lower()
-        # Check if they mention a new issue
-        new_issue_signals = ["new issue", "something else", "different problem", "also", "another"]
-        if any(s in lower for s in new_issue_signals):
+        if match_any_keyword(text, NEW_ISSUE_SIGNALS):
             _transition(session, State.SAFETY)
             return Action(needs_llm=True)
-        # Check if they want to schedule
-        schedule_signals = ["schedule", "book", "appointment"]
-        if any(s in lower for s in schedule_signals):
+        if match_any_keyword(text, SCHEDULE_SIGNALS):
             _transition(session, State.SAFETY)
             return Action(needs_llm=True)
-        # Default: stay for LLM to handle
         return Action(needs_llm=True)
 
     def _handle_manage_booking(self, session: CallSession, text: str) -> Action:
-        lower = text.lower()
-        # Check for new issue
-        new_issue_signals = ["new issue", "something else", "different problem", "also broken"]
-        if any(s in lower for s in new_issue_signals):
+        if match_any_keyword(text, NEW_ISSUE_SIGNALS):
             _transition(session, State.SAFETY)
             return Action(needs_llm=True)
-        # Default: LLM handles reschedule/cancel/status conversation
         return Action(needs_llm=True)
 
     def _handle_safety(self, session: CallSession, text: str) -> Action:
         if detect_safety_emergency(text):
             _transition(session, State.SAFETY_EXIT)
             return Action(needs_llm=True)
-        lower = text.lower()
-        no_signals = ["no", "nope", "nah", "nothing like that", "we're fine",
-                      "all good", "just not cooling", "just not heating"]
-        if any(signal in lower for signal in no_signals):
+        if match_any_keyword(text, NO_SIGNALS):
             _transition(session, State.SERVICE_AREA)
             return Action(needs_llm=True)
-        # Unclear — stay in safety, LLM asks follow-up
         return Action(needs_llm=True)
 
     def _handle_safety_exit(self, session: CallSession, text: str) -> Action:
@@ -237,8 +254,6 @@ class StateMachine:
         return Action(needs_llm=True)
 
     def _handle_urgency(self, session: CallSession, text: str) -> Action:
-        lower = text.lower()
-
         # Check for explicit callback request
         if detect_callback_request(text):
             _transition(session, State.URGENCY_CALLBACK)
@@ -251,39 +266,28 @@ class StateMachine:
 
         # Compound request: caller wants to manage existing appointment mid-service-flow
         if session.has_appointment:
-            if any(s in lower for s in MANAGE_BOOKING_KEYWORDS):
+            if match_any_keyword(text, MANAGE_BOOKING_KEYWORDS):
                 _transition(session, State.CALLBACK)
                 return Action(needs_llm=True)
 
-        # Extract timing from response
-        urgent_signals = ["today", "asap", "right away", "as soon as", "emergency", "right now", "soonest"]
-        routine_signals = ["whenever", "this week", "next few days", "no rush", "not urgent"]
-
-        if any(s in lower for s in urgent_signals):
+        if match_any_keyword(text, URGENT_SIGNALS):
             session.urgency_tier = "urgent"
             session.preferred_time = "soonest available"
             _transition(session, State.PRE_CONFIRM)
             return Action(needs_llm=True)
 
-        if any(s in lower for s in routine_signals):
+        if match_any_keyword(text, ROUTINE_SIGNALS):
             session.urgency_tier = "routine"
             session.preferred_time = "soonest available"
             _transition(session, State.PRE_CONFIRM)
             return Action(needs_llm=True)
 
-        # Check for specific day/time mentions
-        time_patterns = [
-            "tomorrow", "monday", "tuesday", "wednesday", "thursday",
-            "friday", "saturday", "sunday", "morning", "afternoon", "evening",
-            "following day", "next day",
-        ]
-        if any(p in lower for p in time_patterns):
+        if match_any_keyword(text, TIME_PATTERNS):
             session.urgency_tier = "routine"
             session.preferred_time = text.strip()
             _transition(session, State.PRE_CONFIRM)
             return Action(needs_llm=True)
 
-        # Unclear — LLM asks about timing
         return Action(needs_llm=True)
 
     def _handle_urgency_callback(self, session: CallSession, text: str) -> Action:
@@ -294,15 +298,11 @@ class StateMachine:
         return Action(end_call=True, needs_llm=True)
 
     def _handle_pre_confirm(self, session: CallSession, text: str) -> Action:
-        lower = text.lower()
-
         if detect_callback_request(text):
             _transition(session, State.CALLBACK)
             return Action(needs_llm=True)
 
-        yes_signals = ["yes", "yeah", "yep", "sounds right", "sounds good",
-                       "correct", "that's right", "go ahead"]
-        if any(signal in lower for signal in yes_signals):
+        if match_any_keyword(text, YES_SIGNALS):
             session.caller_confirmed = True
             session.booking_attempted = True
             _transition(session, State.BOOKING)
@@ -312,7 +312,6 @@ class StateMachine:
                 needs_llm=True,
             )
 
-        # Stay for corrections or re-confirmation
         return Action(needs_llm=True)
 
     def _handle_booking(self, session: CallSession, text: str) -> Action:

@@ -1,5 +1,12 @@
 import re
 
+
+def match_any_keyword(text: str, keywords: set[str]) -> bool:
+    """Check if any keyword appears in text as a whole word (not substring)."""
+    lower = text.lower()
+    return any(re.search(rf'\b{re.escape(kw)}\b', lower) for kw in keywords)
+
+
 SENTINEL_VALUES = {
     "not provided", "n/a", "na", "unknown", "none", "tbd",
     "{{customer_name}}", "{{zip_code}}", "{{service_address}}",
@@ -95,8 +102,13 @@ def validate_address(value: str | None) -> str:
     cleaned = value.strip()
     if cleaned.lower() in SENTINEL_VALUES:
         return ""
-    # Reject garbled addresses containing "or" (ambiguous alternatives)
     if re.search(r"\bor\b", cleaned, re.IGNORECASE):
+        return ""
+    # Must contain at least one letter (rejects "7801", "78001")
+    if not re.search(r"[a-zA-Z]", cleaned):
+        return ""
+    # Must be at least 5 characters (rejects "Oak", "1 Rk")
+    if len(cleaned) < 5:
         return ""
     return cleaned
 
@@ -113,44 +125,30 @@ def classify_intent(text: str) -> str:
 
     Returns: service, non_service, follow_up, manage_booking
     """
-    lower = text.lower()
-    for keyword in MANAGE_BOOKING_KEYWORDS:
-        if keyword in lower:
-            return "manage_booking"
-    for keyword in FOLLOW_UP_KEYWORDS:
-        if keyword in lower:
-            return "follow_up"
-    for keyword in NON_SERVICE_KEYWORDS:
-        if keyword in lower:
-            return "non_service"
+    if match_any_keyword(text, MANAGE_BOOKING_KEYWORDS):
+        return "manage_booking"
+    if match_any_keyword(text, FOLLOW_UP_KEYWORDS):
+        return "follow_up"
+    if match_any_keyword(text, NON_SERVICE_KEYWORDS):
+        return "non_service"
     return "service"
 
 
 def detect_safety_emergency(text: str) -> bool:
-    lower = text.lower()
-    has_safety = any(keyword in lower for keyword in SAFETY_KEYWORDS)
-    if not has_safety:
+    if not match_any_keyword(text, SAFETY_KEYWORDS):
         return False
-    # Check for retraction in the same utterance
-    has_retraction = any(keyword in lower for keyword in SAFETY_RETRACTION_KEYWORDS)
-    return not has_retraction
+    return not match_any_keyword(text, SAFETY_RETRACTION_KEYWORDS)
 
 
 def detect_high_ticket(text: str) -> bool:
-    lower = text.lower()
-    has_positive = any(keyword in lower for keyword in HIGH_TICKET_POSITIVE)
-    if not has_positive:
+    if not match_any_keyword(text, HIGH_TICKET_POSITIVE):
         return False
-    # If negative keywords also present, it's a repair, not high-ticket
-    has_negative = any(keyword in lower for keyword in HIGH_TICKET_NEGATIVE)
-    return not has_negative
+    return not match_any_keyword(text, HIGH_TICKET_NEGATIVE)
 
 
 def detect_callback_request(text: str) -> bool:
-    lower = text.lower()
-    return any(keyword in lower for keyword in CALLBACK_REQUEST_KEYWORDS)
+    return match_any_keyword(text, CALLBACK_REQUEST_KEYWORDS)
 
 
 def detect_property_manager(text: str) -> bool:
-    lower = text.lower()
-    return any(keyword in lower for keyword in PROPERTY_MANAGER_KEYWORDS)
+    return match_any_keyword(text, PROPERTY_MANAGER_KEYWORDS)

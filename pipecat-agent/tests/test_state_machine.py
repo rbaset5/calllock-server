@@ -156,6 +156,28 @@ class TestSafetyState:
         action = sm.process(session, "what do you mean")
         assert session.state == State.SAFETY
 
+    def test_not_working_does_not_match_no_signal(self, sm, session):
+        """'not' should not match 'no' — the substring bug from Jonas call."""
+        session.state = State.SAFETY
+        action = sm.process(session, "It's not it doesn't come on")
+        assert session.state == State.SAFETY
+
+    def test_noticed_smoke_does_not_match_no_signal(self, sm, session):
+        """'noticed' should not match 'no' — latent variant of the same bug."""
+        session.state = State.SAFETY
+        action = sm.process(session, "I noticed some smoke earlier")
+        assert session.state == State.SAFETY_EXIT
+
+    def test_explicit_no_still_matches(self, sm, session):
+        session.state = State.SAFETY
+        action = sm.process(session, "no")
+        assert session.state == State.SERVICE_AREA
+
+    def test_nope_still_matches(self, sm, session):
+        session.state = State.SAFETY
+        action = sm.process(session, "nope, nothing like that")
+        assert session.state == State.SERVICE_AREA
+
     def test_retracted_emergency_stays_in_safety(self, sm, session):
         """Safety retraction: 'gas heater but never mind' should NOT trigger emergency."""
         session.state = State.SAFETY
@@ -744,3 +766,73 @@ class TestRegressionCA76a150a:
         sm.process(session, "I was looking for the soonest available appointment")
         assert session.state == State.PRE_CONFIRM
         assert session.urgency_tier == "urgent"
+
+
+# --- Terminal state scripts ---
+
+class TestTerminalScripts:
+    def test_callback_has_canned_script(self):
+        from calllock.state_machine import TERMINAL_SCRIPTS
+        assert State.CALLBACK in TERMINAL_SCRIPTS
+        assert "call you back" in TERMINAL_SCRIPTS[State.CALLBACK]
+
+    def test_booking_failed_has_canned_script(self):
+        from calllock.state_machine import TERMINAL_SCRIPTS
+        assert State.BOOKING_FAILED in TERMINAL_SCRIPTS
+
+    def test_safety_exit_has_canned_script(self):
+        from calllock.state_machine import TERMINAL_SCRIPTS
+        assert State.SAFETY_EXIT in TERMINAL_SCRIPTS
+        assert "911" in TERMINAL_SCRIPTS[State.SAFETY_EXIT]
+
+    def test_booking_language_filter_exists(self):
+        from calllock.state_machine import BOOKING_LANGUAGE
+        assert "appointment" in BOOKING_LANGUAGE
+        assert "schedule" in BOOKING_LANGUAGE
+
+    def test_booking_language_detected(self):
+        from calllock.state_machine import BOOKING_LANGUAGE
+        from calllock.validation import match_any_keyword
+        assert match_any_keyword("Let me schedule that appointment", BOOKING_LANGUAGE) is True
+        assert match_any_keyword("I'm the virtual receptionist", BOOKING_LANGUAGE) is False
+
+
+class TestJonasCallRegression:
+    """Regression test for Jonas call CA1fd951b84d358e00b0fe7cc9464430ba.
+
+    Bug: "not" matched "no" via substring, and 4-digit ZIP fragment was
+    processed by async extraction before the handler could set the correct
+    5-digit ZIP, routing the call to CALLBACK instead of DISCOVERY.
+    """
+
+    def test_caller_gives_correct_zip_after_wrong_fragments(self, sm, session):
+        """Simulate the exact Jonas call sequence."""
+        # WELCOME: service intent → LOOKUP
+        session.state = State.WELCOME
+        sm.process(session, "Yeah I'm having a problem with my air conditioning")
+        assert session.state == State.LOOKUP
+
+        # LOOKUP tool result
+        sm.handle_tool_result(session, "lookup_caller", {
+            "found": True,
+            "customerName": "Jonas",
+        })
+        assert session.state == State.SAFETY
+
+        # SAFETY: "not" should NOT match "no" signal (the substring bug)
+        sm.process(session, "It's not it doesn't come on all the time")
+        assert session.state == State.SAFETY
+
+        # SAFETY: explicit "no" clears safety
+        sm.process(session, "No nothing like that")
+        assert session.state == State.SERVICE_AREA
+
+        # SERVICE_AREA: first attempt has only 4 digits
+        sm.process(session, "seven eight zero one")
+        # words_to_digits → "7801" (4 digits), no 5-digit match
+        assert session.state == State.SERVICE_AREA
+
+        # SERVICE_AREA: correct 5-digit ZIP
+        sm.process(session, "Seven eight seven zero one")
+        # words_to_digits → "78701", valid, in service area
+        assert session.state == State.DISCOVERY  # NOT CALLBACK

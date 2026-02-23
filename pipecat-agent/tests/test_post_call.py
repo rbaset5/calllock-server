@@ -199,6 +199,21 @@ class TestHandleCallEnded:
         await handle_call_ended(completed_session)
 
 
+class TestCallLeadLinking:
+    def test_call_payload_includes_lead_id(self):
+        s = CallSession(phone_number="+15125551234")
+        s.customer_name = "Jonas"
+        s.start_time = 1000.0
+        payload = build_call_payload(s, end_time=1070.0, user_email="test@test.com", lead_id="abc-123")
+        assert payload["lead_id"] == "abc-123"
+
+    def test_call_payload_without_lead_id(self):
+        s = CallSession(phone_number="+15125551234")
+        s.start_time = 1000.0
+        payload = build_call_payload(s, end_time=1070.0, user_email="test@test.com")
+        assert payload.get("lead_id") is None
+
+
 class TestUrgencyMapping:
     def test_routine_maps_to_low(self, completed_session):
         completed_session.urgency_tier = "routine"

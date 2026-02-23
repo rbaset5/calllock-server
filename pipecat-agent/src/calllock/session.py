@@ -46,6 +46,9 @@ class CallSession:
     callback_attempts: int = 0
     callback_type: str = "service"  # billing, warranty, estimate, service, follow_up, general
 
+    # Terminal state response control
+    terminal_reply_used: bool = False
+
     # Call metadata
     call_sid: str = ""
     start_time: float = 0.0

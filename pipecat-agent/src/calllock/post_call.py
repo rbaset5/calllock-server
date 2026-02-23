@@ -102,7 +102,7 @@ def build_job_payload(session: CallSession, end_time: float, user_email: str) ->
     return payload
 
 
-def build_call_payload(session: CallSession, end_time: float, user_email: str) -> dict:
+def build_call_payload(session: CallSession, end_time: float, user_email: str, lead_id: str | None = None) -> dict:
     """Build the call record payload."""
     now_dt = datetime.now(timezone.utc).isoformat()
     start_dt = datetime.fromtimestamp(session.start_time, tz=timezone.utc).isoformat() if session.start_time > 0 else now_dt
@@ -122,6 +122,7 @@ def build_call_payload(session: CallSession, end_time: float, user_email: str) -
         "urgency_tier": session.urgency_tier,
         "problem_description": session.problem_description,
         "booking_status": _derive_booking_status(session),
+        "lead_id": lead_id,
         "transcript_object": [
             e for e in to_json_array(session.transcript_log)
             if e.get("role") in ("agent", "user")
@@ -202,8 +203,11 @@ async def handle_call_ended(session: CallSession):
     job_result = await dashboard.send_job(job_payload)
     logger.info(f"Dashboard job sync: {job_result}")
 
-    # 2. Send call record
-    call_payload = build_call_payload(session, end_time, user_email)
+    # Extract lead_id for call-lead linking
+    lead_id = job_result.get("lead_id") if isinstance(job_result, dict) else None
+
+    # 2. Send call record (linked to lead)
+    call_payload = build_call_payload(session, end_time, user_email, lead_id=lead_id)
     call_result = await dashboard.send_call(call_payload)
     logger.info(f"Dashboard call sync: {call_result}")
 

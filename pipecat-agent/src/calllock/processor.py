@@ -14,10 +14,10 @@ from pipecat.frames.frames import (
 )
 
 from calllock.session import CallSession
-from calllock.state_machine import StateMachine, Action
+from calllock.state_machine import StateMachine, Action, TERMINAL_SCRIPTS, TERMINAL_SCOPED_PROMPT, BOOKING_LANGUAGE
 from calllock.prompts import get_system_prompt
 from calllock.extraction import extract_fields
-from calllock.validation import validate_name, validate_zip
+from calllock.validation import validate_name, validate_zip, match_any_keyword
 from calllock.tools import V2Client
 
 logger = logging.getLogger(__name__)
@@ -216,6 +216,11 @@ class StateMachineProcessor(FrameProcessor):
         if self.session.state.value in ("service_area", "discovery", "urgency", "pre_confirm"):
             asyncio.create_task(self._safe_extraction())
 
+        # Terminal state routing: use canned responses instead of LLM
+        if self.session.state.is_terminal and TERMINAL_SCRIPTS.get(self.session.state):
+            await self._handle_terminal_response(frame, action)
+            return
+
         # End the call if needed
         if action.end_call:
             if action.needs_llm or force_llm:
@@ -246,6 +251,67 @@ class StateMachineProcessor(FrameProcessor):
         """Push EndFrame after a delay to allow TTS to finish speaking."""
         await asyncio.sleep(delay)
         await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+
+    async def _handle_terminal_response(self, frame, action):
+        """Handle responses in terminal states with canned scripts + one scoped LLM reply.
+
+        Layer 1: Canned scripts for known terminal states
+        Layer 2: One scoped LLM reply (first off-script utterance only)
+        Layer 3: Booking language filter on the LLM reply
+        """
+        state = self.session.state
+        canned = TERMINAL_SCRIPTS.get(state)
+
+        # First utterance: allow one scoped LLM reply before the canned close
+        if not self.session.terminal_reply_used and canned:
+            self.session.terminal_reply_used = True
+            scoped_messages = [
+                {"role": "system", "content": TERMINAL_SCOPED_PROMPT},
+                {"role": "user", "content": frame.text.strip()},
+            ]
+            try:
+                reply = await self._generate_scoped_reply(scoped_messages)
+                if reply and not match_any_keyword(reply, BOOKING_LANGUAGE):
+                    await self.push_frame(
+                        TTSSpeakFrame(text=reply), FrameDirection.DOWNSTREAM
+                    )
+                    await asyncio.sleep(1.5)
+            except Exception as e:
+                logger.warning(f"Scoped reply failed: {e}")
+
+        # Serve canned script
+        if canned:
+            await self.push_frame(
+                TTSSpeakFrame(text=canned), FrameDirection.DOWNSTREAM
+            )
+        else:
+            # Dynamic terminal states (CONFIRM, URGENCY_CALLBACK) use LLM
+            await self.push_frame(frame, FrameDirection.DOWNSTREAM)
+
+        if action.end_call:
+            asyncio.create_task(self._delayed_end_call(delay=4.0))
+
+    async def _generate_scoped_reply(self, messages: list[dict]) -> str:
+        """Generate a single LLM response using a scoped prompt."""
+        import httpx
+        import os
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY', '')}"},
+                    json={
+                        "model": "gpt-4o-mini",
+                        "temperature": 0.3,
+                        "max_tokens": 50,
+                        "messages": messages,
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            logger.warning(f"Scoped LLM reply failed: {e}")
+            return ""
 
     async def _execute_tool(self, action: Action):
         tool = action.call_tool
@@ -306,7 +372,13 @@ class StateMachineProcessor(FrameProcessor):
             logger.error(f"Background extraction failed: {e}")
 
     async def _run_extraction(self):
-        """Extract structured fields from conversation using LLM."""
+        """Extract structured fields from conversation using LLM.
+
+        EXTRACTION FIREWALL: Only extraction-owned fields are set here.
+        Handler-owned fields (zip_code, service_address, customer_name) are
+        NEVER set by extraction — they have deterministic paths in the state
+        machine handlers and lookup_caller tool result.
+        """
         if len(self.session.conversation_history) < 2:
             return
 
@@ -314,31 +386,16 @@ class StateMachineProcessor(FrameProcessor):
         if not extracted:
             return
 
-        # Only update fields that are currently empty
-        if not self.session.customer_name:
-            name = validate_name(extracted.get("customer_name", ""))
-            if name:
-                self.session.customer_name = name
-
+        # Extraction-owned fields only
         if not self.session.problem_description:
             prob = extracted.get("problem_description", "")
             if prob:
                 self.session.problem_description = prob
 
-        if not self.session.service_address:
-            addr = extracted.get("service_address", "")
-            if addr:
-                self.session.service_address = addr
-
-        if not self.session.zip_code:
-            zip_code = validate_zip(extracted.get("zip_code", ""))
-            if zip_code:
-                self.session.zip_code = zip_code
-
         if not self.session.preferred_time:
-            time = extracted.get("preferred_time", "")
-            if time:
-                self.session.preferred_time = time
+            ptime = extracted.get("preferred_time", "")
+            if ptime:
+                self.session.preferred_time = ptime
 
         if not self.session.equipment_type:
             equip = extracted.get("equipment_type", "")

@@ -5,6 +5,7 @@ from calllock.processor import StateMachineProcessor
 from calllock.session import CallSession
 from calllock.state_machine import StateMachine
 from calllock.states import State
+from calllock.extraction import extract_fields
 
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.frames.frames import TranscriptionFrame, InterimTranscriptionFrame, EndFrame, LLMMessagesFrame
@@ -355,8 +356,9 @@ class TestPostToolLLMTrigger:
 
         Uses a mocked state machine to create a needs_llm=False + no-transition
         scenario (no natural state machine path produces this combo).
+        Uses URGENCY (non-terminal) so terminal canned routing doesn't intercept.
         """
-        processor.session.state = State.CALLBACK
+        processor.session.state = State.URGENCY
 
         # Mock machine.process to return needs_llm=False with a tool call
         mock_action = Action(call_tool="create_callback", needs_llm=False)
@@ -456,3 +458,135 @@ class TestPostToolDebounce:
         assert len(transcription_frames) == 1
         assert "my AC is broken" in transcription_frames[0].text
         assert "blowing warm air" in transcription_frames[0].text
+
+
+class TestExtractionFirewall:
+    """Extraction must NOT overwrite handler-owned fields."""
+
+    @pytest.mark.asyncio
+    async def test_extraction_does_not_overwrite_zip(self, processor):
+        """Reproduces Jonas call bug: extraction set wrong ZIP before handler corrected it."""
+        # Restore real _run_extraction (fixture mocks it)
+        processor._run_extraction = StateMachineProcessor._run_extraction.__get__(processor)
+        processor.session.zip_code = "78701"
+        processor.session.conversation_history = [
+            {"role": "user", "content": "seven eight zero one"},
+            {"role": "assistant", "content": "What's your ZIP?"},
+        ]
+        with patch("calllock.processor.extract_fields", new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = {"zip_code": "78001", "problem_description": "fan issue"}
+            await processor._run_extraction()
+        assert processor.session.zip_code == "78701"
+
+    @pytest.mark.asyncio
+    async def test_extraction_does_not_set_zip_even_when_empty(self, processor):
+        """Extraction should never set zip_code — that's handler-only."""
+        processor._run_extraction = StateMachineProcessor._run_extraction.__get__(processor)
+        processor.session.zip_code = ""
+        processor.session.conversation_history = [
+            {"role": "user", "content": "seven eight seven zero one"},
+            {"role": "assistant", "content": "Got it."},
+        ]
+        with patch("calllock.processor.extract_fields", new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = {"zip_code": "78701"}
+            await processor._run_extraction()
+        assert processor.session.zip_code == ""
+
+    @pytest.mark.asyncio
+    async def test_extraction_does_not_set_address(self, processor):
+        processor._run_extraction = StateMachineProcessor._run_extraction.__get__(processor)
+        processor.session.service_address = ""
+        processor.session.conversation_history = [
+            {"role": "user", "content": "123 Oak Street"},
+            {"role": "assistant", "content": "Got it."},
+        ]
+        with patch("calllock.processor.extract_fields", new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = {"service_address": "123 Oak Street"}
+            await processor._run_extraction()
+        assert processor.session.service_address == ""
+
+    @pytest.mark.asyncio
+    async def test_extraction_does_not_set_name(self, processor):
+        processor._run_extraction = StateMachineProcessor._run_extraction.__get__(processor)
+        processor.session.customer_name = ""
+        processor.session.conversation_history = [
+            {"role": "user", "content": "This is Jonas"},
+            {"role": "assistant", "content": "Hi Jonas."},
+        ]
+        with patch("calllock.processor.extract_fields", new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = {"customer_name": "Jonas"}
+            await processor._run_extraction()
+        assert processor.session.customer_name == ""
+
+    @pytest.mark.asyncio
+    async def test_extraction_still_sets_problem_description(self, processor):
+        """Extraction-owned fields should still work."""
+        processor._run_extraction = StateMachineProcessor._run_extraction.__get__(processor)
+        processor.session.problem_description = ""
+        processor.session.conversation_history = [
+            {"role": "user", "content": "My AC fan is intermittent"},
+            {"role": "assistant", "content": "Got it."},
+        ]
+        with patch("calllock.processor.extract_fields", new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = {"problem_description": "AC fan is intermittent"}
+            await processor._run_extraction()
+        assert processor.session.problem_description == "AC fan is intermittent"
+
+
+class TestTerminalCannedResponses:
+    """Terminal states should use canned responses instead of LLM."""
+
+    @pytest.mark.asyncio
+    async def test_callback_state_uses_canned_script(self, processor):
+        """In CALLBACK state after callback is created, should push canned TTSSpeakFrame."""
+        processor.session.state = State.CALLBACK
+        processor.session.callback_created = True
+        processor.session.terminal_reply_used = False
+
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+        ]
+
+        frame = TranscriptionFrame(text="Can I still get scheduled?", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+
+        # Should push TTSSpeakFrame with canned script (not pass frame to LLM)
+        from pipecat.frames.frames import TTSSpeakFrame
+        pushed_frames = [c.args[0] for c in processor.push_frame.call_args_list]
+        tts_frames = [f for f in pushed_frames if isinstance(f, TTSSpeakFrame)]
+        assert len(tts_frames) >= 1, f"Expected TTSSpeakFrame, got: {[type(f).__name__ for f in pushed_frames]}"
+        assert "call you back" in tts_frames[-1].text
+
+    @pytest.mark.asyncio
+    async def test_terminal_reply_used_flag_set(self, processor):
+        """First utterance in terminal state should set terminal_reply_used."""
+        processor.session.state = State.CALLBACK
+        processor.session.callback_created = True
+        processor.session.terminal_reply_used = False
+
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+        ]
+
+        frame = TranscriptionFrame(text="When will someone call?", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+
+        assert processor.session.terminal_reply_used is True
+
+    @pytest.mark.asyncio
+    async def test_safety_exit_uses_canned_script(self, processor):
+        """SAFETY_EXIT should use canned 911 script."""
+        processor.session.state = State.SAFETY_EXIT
+        processor.session.terminal_reply_used = False
+
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+        ]
+
+        frame = TranscriptionFrame(text="what should I do", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+
+        from pipecat.frames.frames import TTSSpeakFrame
+        pushed_frames = [c.args[0] for c in processor.push_frame.call_args_list]
+        tts_frames = [f for f in pushed_frames if isinstance(f, TTSSpeakFrame)]
+        assert any("911" in f.text for f in tts_frames), f"Expected 911 script, got: {[f.text for f in tts_frames]}"
