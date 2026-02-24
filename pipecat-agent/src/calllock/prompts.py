@@ -79,6 +79,8 @@ def _build_context(session: CallSession) -> str:
         parts.append("HIGH-TICKET LEAD: Caller wants replacement/new system")
     if session.is_third_party:
         parts.append(f"Third-party caller (property manager). Site contact: {session.site_contact_name} at {session.site_contact_phone}")
+    if session.state == State.CONFIRM and session.confirmation_message:
+        parts.append(f"Booking result: {session.confirmation_message}")
     if not parts:
         return ""
     return "KNOWN INFO:\n" + "\n".join(f"- {p}" for p in parts)

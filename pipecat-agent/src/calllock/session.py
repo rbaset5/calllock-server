@@ -40,6 +40,7 @@ class CallSession:
     booking_attempted: bool = False
     booked_time: str = ""
     appointment_id: str = ""
+    confirmation_message: str = ""
 
     # From callback
     callback_created: bool = False

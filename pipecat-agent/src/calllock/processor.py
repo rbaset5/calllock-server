@@ -330,6 +330,9 @@ class StateMachineProcessor(FrameProcessor):
                 preferred_time=resolve_booking_time(self.session.preferred_time),
                 phone=self.session.phone_number,
             )
+            # Store confirmation for system prompt rendering in CONFIRM state
+            if result.get("booking_confirmed"):
+                self.session.confirmation_message = result.get("confirmationMessage", "")
         elif tool == "create_callback":
             result = await self.tools.create_callback(
                 phone=self.session.phone_number,

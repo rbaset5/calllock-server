@@ -629,3 +629,47 @@ class TestTerminalCannedResponses:
         pushed_frames = [c.args[0] for c in processor.push_frame.call_args_list]
         tts_frames = [f for f in pushed_frames if isinstance(f, TTSSpeakFrame)]
         assert any("911" in f.text for f in tts_frames), f"Expected 911 script, got: {[f.text for f in tts_frames]}"
+
+
+class TestBookingConfirmationStorage:
+    """After book_service returns success, confirmation_message must be stored on session."""
+
+    @pytest.mark.asyncio
+    async def test_confirmation_message_stored_on_session(self, processor):
+        processor.session.state = State.BOOKING
+        processor.session.booking_attempted = False
+        processor.session.customer_name = "Jonas"
+        processor.session.problem_description = "AC broken"
+        processor.session.service_address = "5311 Izzical Road"
+        processor.session.preferred_time = "ASAP"
+        processor.tools.book_service.return_value = {
+            "booking_confirmed": True,
+            "confirmationMessage": "Appointment confirmed for Monday, February 24 at 2:00 PM",
+            "appointmentId": "apt_123",
+        }
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+        ]
+
+        frame = TranscriptionFrame(text="sounds good", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+
+        assert processor.session.state == State.CONFIRM
+        assert processor.session.confirmation_message == "Appointment confirmed for Monday, February 24 at 2:00 PM"
+
+    @pytest.mark.asyncio
+    async def test_no_confirmation_message_on_failure(self, processor):
+        processor.session.state = State.BOOKING
+        processor.session.booking_attempted = False
+        processor.tools.book_service.return_value = {
+            "booked": False,
+            "error": "No slots available",
+        }
+        processor.context.messages = [
+            {"role": "system", "content": "test"},
+        ]
+
+        frame = TranscriptionFrame(text="sounds good", user_id="", timestamp="")
+        await processor._handle_transcription(frame)
+
+        assert processor.session.confirmation_message == ""

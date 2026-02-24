@@ -1,4 +1,4 @@
-from calllock.prompts import PERSONA, STATE_PROMPTS, get_system_prompt
+from calllock.prompts import PERSONA, STATE_PROMPTS, get_system_prompt, _build_context
 from calllock.session import CallSession
 from calllock.states import State
 
@@ -103,3 +103,25 @@ class TestAppointmentContextGating:
         session.appointment_date = "2026-02-20"
         prompt = get_system_prompt(session)
         assert "2026-02-20" in prompt
+
+
+class TestBuildContextBookingDetails:
+    """_build_context renders confirmation_message only in CONFIRM state."""
+
+    def test_confirm_state_includes_booking_details(self):
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.CONFIRM
+        session.customer_name = "Jonas"
+        session.confirmation_message = "Appointment confirmed for Monday, February 24 at 2:00 PM"
+
+        context = _build_context(session)
+        assert "Monday, February 24 at 2:00 PM" in context
+
+    def test_non_confirm_state_excludes_booking_details(self):
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.BOOKING
+        session.customer_name = "Jonas"
+        session.confirmation_message = "Appointment confirmed for Monday, February 24 at 2:00 PM"
+
+        context = _build_context(session)
+        assert "Monday, February 24" not in context
