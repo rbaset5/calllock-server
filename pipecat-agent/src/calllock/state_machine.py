@@ -15,6 +15,8 @@ from calllock.validation import (
     detect_callback_request,
     match_any_keyword,
     MANAGE_BOOKING_KEYWORDS,
+    WORD_TO_DIGIT,
+    words_to_digits,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,24 +104,6 @@ NEVER mention scheduling, appointments, availability, booking, or next steps.
 NEVER offer to help with their service issue."""
 
 BOOKING_LANGUAGE = frozenset({"appointment", "schedule", "book", "tech out", "available", "slot", "open"})
-
-
-WORD_TO_DIGIT = {
-    "zero": "0", "oh": "0", "o": "0",
-    "one": "1", "two": "2", "three": "3", "four": "4",
-    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
-}
-
-
-def words_to_digits(text: str) -> str:
-    tokens = re.findall(r"[a-zA-Z]+|\d", text.lower())
-    digits = []
-    for tok in tokens:
-        if tok in WORD_TO_DIGIT:
-            digits.append(WORD_TO_DIGIT[tok])
-        elif tok.isdigit():
-            digits.append(tok)
-    return "".join(digits)
 
 
 def _transition(session: CallSession, new_state: State):

@@ -73,6 +73,29 @@ PROPERTY_MANAGER_KEYWORDS = {
     "calling on behalf", "the unit is at",
 }
 
+WORD_TO_DIGIT = {
+    "zero": "0", "oh": "0", "o": "0",
+    "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+}
+
+
+def words_to_digits(text: str) -> str:
+    """Convert number words and single digits to a digit string.
+
+    Only handles single-digit words (one through nine, zero, oh, o).
+    Used for ZIP code and address normalization.
+    Example: "seven eight seven zero one" → "78701"
+    """
+    tokens = re.findall(r"[a-zA-Z]+|\d", text.lower())
+    digits = []
+    for tok in tokens:
+        if tok in WORD_TO_DIGIT:
+            digits.append(WORD_TO_DIGIT[tok])
+        elif tok.isdigit():
+            digits.append(tok)
+    return "".join(digits)
+
 
 def validate_zip(value: str | None) -> str:
     if not value:
