@@ -19,6 +19,7 @@ _URGENCY_MAP = {
     "low": "low",
     "medium": "medium",
     "high": "high",
+    "urgent": "high",
     "emergency": "emergency",
 }
 

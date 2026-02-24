@@ -245,6 +245,11 @@ class TestUrgencyMapping:
         payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
         assert payload["urgency"] == "low"
 
+    def test_urgent_maps_to_high(self, completed_session):
+        completed_session.urgency_tier = "urgent"
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert payload["urgency"] == "high"
+
 
 class TestTranscriptFiltering:
     def test_calls_payload_excludes_tool_entries(self, completed_session):
