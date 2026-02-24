@@ -1,0 +1,838 @@
+import pytest
+from calllock.session import CallSession
+from calllock.states import State
+from calllock.state_machine import StateMachine, Action, words_to_digits
+
+
+@pytest.fixture
+def sm():
+    return StateMachine()
+
+
+@pytest.fixture
+def session():
+    return CallSession(phone_number="+15125551234")
+
+
+# --- WELCOME state ---
+
+class TestWelcomeState:
+    def test_service_intent_routes_to_lookup(self, sm, session):
+        action = sm.process(session, "my AC is broken")
+        assert session.state == State.LOOKUP
+
+    def test_billing_intent_routes_to_non_service(self, sm, session):
+        action = sm.process(session, "I have a billing question")
+        assert session.state == State.NON_SERVICE
+
+    def test_vendor_intent_routes_to_non_service(self, sm, session):
+        action = sm.process(session, "I'm a parts supplier")
+        assert session.state == State.NON_SERVICE
+
+    def test_ambiguous_defaults_to_lookup(self, sm, session):
+        action = sm.process(session, "hello")
+        assert session.state == State.LOOKUP
+
+    def test_follow_up_intent_routes_to_lookup(self, sm, session):
+        action = sm.process(session, "I'm following up on a previous call")
+        assert session.state == State.LOOKUP
+        assert session.caller_intent == "follow_up"
+
+    def test_manage_booking_intent_routes_to_lookup(self, sm, session):
+        action = sm.process(session, "I need to reschedule my appointment")
+        assert session.state == State.LOOKUP
+        assert session.caller_intent == "manage_booking"
+
+
+# --- NON_SERVICE state ---
+
+class TestNonServiceState:
+    def test_stays_in_non_service_by_default(self, sm, session):
+        session.state = State.NON_SERVICE
+        action = sm.process(session, "when can I get a call back about my bill?")
+        assert session.state == State.NON_SERVICE
+
+    def test_schedule_request_routes_to_safety(self, sm, session):
+        session.state = State.NON_SERVICE
+        action = sm.process(session, "yes I'd like to schedule a visit")
+        assert session.state == State.SAFETY
+
+
+# --- LOOKUP state ---
+
+class TestLookupState:
+    def test_routes_to_safety_after_lookup(self, sm, session):
+        session.state = State.LOOKUP
+        action = sm.process(session, "")
+        assert action.call_tool == "lookup_caller"
+
+    def test_populates_session_from_lookup_result(self, sm, session):
+        session.state = State.LOOKUP
+        sm.handle_tool_result(session, "lookup_caller", {
+            "found": True,
+            "customerName": "Jonas",
+            "zipCode": "78745",
+            "address": "4210 South Lamar Blvd",
+        })
+        assert session.caller_known is True
+        assert session.customer_name == "Jonas"
+        assert session.zip_code == "78745"
+        assert session.service_address == "4210 South Lamar Blvd"
+        assert session.state == State.SAFETY
+
+    def test_unknown_caller_still_routes_to_safety(self, sm, session):
+        session.state = State.LOOKUP
+        sm.handle_tool_result(session, "lookup_caller", {"found": False})
+        assert session.caller_known is False
+        assert session.state == State.SAFETY
+
+    def test_follow_up_intent_routes_to_follow_up(self, sm, session):
+        session.state = State.LOOKUP
+        session.caller_intent = "follow_up"
+        sm.handle_tool_result(session, "lookup_caller", {"found": True, "customerName": "Jonas"})
+        assert session.state == State.FOLLOW_UP
+
+    def test_manage_booking_intent_routes_to_manage_booking(self, sm, session):
+        session.state = State.LOOKUP
+        session.caller_intent = "manage_booking"
+        sm.handle_tool_result(session, "lookup_caller", {
+            "found": True,
+            "customerName": "Jonas",
+            "upcomingAppointment": {"date": "2026-02-20", "time": "10:00 AM", "uid": "abc123"},
+        })
+        assert session.state == State.MANAGE_BOOKING
+        assert session.has_appointment is True
+        assert session.appointment_uid == "abc123"
+
+
+# --- FOLLOW_UP state ---
+
+class TestFollowUpState:
+    def test_new_issue_routes_to_safety(self, sm, session):
+        session.state = State.FOLLOW_UP
+        action = sm.process(session, "I also have a new issue")
+        assert session.state == State.SAFETY
+
+    def test_schedule_routes_to_safety(self, sm, session):
+        session.state = State.FOLLOW_UP
+        action = sm.process(session, "I want to book an appointment")
+        assert session.state == State.SAFETY
+
+    def test_stays_by_default(self, sm, session):
+        session.state = State.FOLLOW_UP
+        action = sm.process(session, "just checking in")
+        assert session.state == State.FOLLOW_UP
+
+
+# --- MANAGE_BOOKING state ---
+
+class TestManageBookingState:
+    def test_stays_for_reschedule_discussion(self, sm, session):
+        session.state = State.MANAGE_BOOKING
+        action = sm.process(session, "can I move it to Friday?")
+        assert session.state == State.MANAGE_BOOKING
+
+    def test_new_issue_routes_to_safety(self, sm, session):
+        session.state = State.MANAGE_BOOKING
+        action = sm.process(session, "I have a different problem")
+        assert session.state == State.SAFETY
+
+
+# --- SAFETY state ---
+
+class TestSafetyState:
+    def test_emergency_routes_to_safety_exit(self, sm, session):
+        session.state = State.SAFETY
+        action = sm.process(session, "yes I smell gas right now")
+        assert session.state == State.SAFETY_EXIT
+
+    def test_no_emergency_routes_to_service_area(self, sm, session):
+        session.state = State.SAFETY
+        action = sm.process(session, "no nothing like that")
+        assert session.state == State.SERVICE_AREA
+
+    def test_unclear_stays_in_safety(self, sm, session):
+        session.state = State.SAFETY
+        action = sm.process(session, "what do you mean")
+        assert session.state == State.SAFETY
+
+    def test_not_working_does_not_match_no_signal(self, sm, session):
+        """'not' should not match 'no' — the substring bug from Jonas call."""
+        session.state = State.SAFETY
+        action = sm.process(session, "It's not it doesn't come on")
+        assert session.state == State.SAFETY
+
+    def test_noticed_smoke_does_not_match_no_signal(self, sm, session):
+        """'noticed' should not match 'no' — latent variant of the same bug."""
+        session.state = State.SAFETY
+        action = sm.process(session, "I noticed some smoke earlier")
+        assert session.state == State.SAFETY_EXIT
+
+    def test_explicit_no_still_matches(self, sm, session):
+        session.state = State.SAFETY
+        action = sm.process(session, "no")
+        assert session.state == State.SERVICE_AREA
+
+    def test_nope_still_matches(self, sm, session):
+        session.state = State.SAFETY
+        action = sm.process(session, "nope, nothing like that")
+        assert session.state == State.SERVICE_AREA
+
+    def test_retracted_emergency_stays_in_safety(self, sm, session):
+        """Safety retraction: 'gas heater but never mind' should NOT trigger emergency."""
+        session.state = State.SAFETY
+        action = sm.process(session, "gas heater but never mind")
+        assert session.state != State.SAFETY_EXIT
+
+
+# --- SAFETY_EXIT state ---
+
+class TestSafetyExitState:
+    def test_ends_call(self, sm, session):
+        session.state = State.SAFETY_EXIT
+        action = sm.process(session, "")
+        assert action.end_call is True
+
+
+# --- SERVICE_AREA state ---
+
+class TestServiceAreaState:
+    def test_known_valid_zip_routes_to_discovery(self, sm, session):
+        session.state = State.SERVICE_AREA
+        session.zip_code = "78745"
+        action = sm.process(session, "")
+        assert session.state == State.DISCOVERY
+
+    def test_caller_provides_valid_zip(self, sm, session):
+        session.state = State.SERVICE_AREA
+        action = sm.process(session, "my ZIP is 78701")
+        assert session.zip_code == "78701"
+        assert session.state == State.DISCOVERY
+
+    def test_out_of_area_zip_routes_to_callback(self, sm, session):
+        session.state = State.SERVICE_AREA
+        action = sm.process(session, "my ZIP is 90210")
+        assert session.state == State.CALLBACK
+
+    def test_invalid_zip_stays_in_state(self, sm, session):
+        session.state = State.SERVICE_AREA
+        action = sm.process(session, "it's 787")
+        assert session.state == State.SERVICE_AREA
+
+    def test_spoken_zip_parsed(self, sm, session):
+        session.state = State.SERVICE_AREA
+        action = sm.process(session, "seven eight seven zero one")
+        assert session.zip_code == "78701"
+        assert session.state == State.DISCOVERY
+
+    def test_spoken_zip_with_oh(self, sm, session):
+        session.state = State.SERVICE_AREA
+        action = sm.process(session, "seven eight seven oh one")
+        assert session.zip_code == "78701"
+        assert session.state == State.DISCOVERY
+
+    def test_spoken_zip_in_sentence(self, sm, session):
+        session.state = State.SERVICE_AREA
+        action = sm.process(session, "my zip is seven eight seven four five")
+        assert session.zip_code == "78745"
+        assert session.state == State.DISCOVERY
+
+
+# --- words_to_digits ---
+
+class TestWordsToDigits:
+    def test_full_spoken_zip(self):
+        assert words_to_digits("seven eight seven zero one") == "78701"
+
+    def test_oh_as_zero(self):
+        assert words_to_digits("seven eight seven oh one") == "78701"
+
+    def test_mixed_words_and_digits(self):
+        assert words_to_digits("seven 8 seven 0 one") == "78701"
+
+    def test_no_numbers(self):
+        assert words_to_digits("hello world") == ""
+
+    def test_raw_digits(self):
+        assert words_to_digits("78701") == "78701"
+
+
+# --- DISCOVERY state ---
+
+class TestDiscoveryState:
+    def test_all_fields_routes_to_urgency(self, sm, session):
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC blowing warm air"
+        session.service_address = "4210 South Lamar Blvd"
+        action = sm.process(session, "")
+        assert session.state == State.URGENCY
+
+    def test_missing_name_stays(self, sm, session):
+        session.state = State.DISCOVERY
+        session.problem_description = "AC broken"
+        session.service_address = "123 Main St"
+        action = sm.process(session, "")
+        assert session.state == State.DISCOVERY
+
+    def test_phone_number_as_name_rejected(self, sm, session):
+        session.state = State.DISCOVERY
+        session.customer_name = "5125551234"
+        session.problem_description = "AC broken"
+        session.service_address = "123 Main St"
+        action = sm.process(session, "")
+        assert session.customer_name == ""
+        assert session.state == State.DISCOVERY
+
+    def test_high_ticket_detected_in_discovery(self, sm, session):
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "I want a new system upgrade"
+        session.service_address = "123 Main St"
+        action = sm.process(session, "")
+        assert session.lead_type == "high_ticket"
+        assert session.state == State.URGENCY
+
+    def test_garbled_address_rejected(self, sm, session):
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC broken"
+        session.service_address = "123 Main or 456 Oak"
+        action = sm.process(session, "")
+        assert session.service_address == ""
+        assert session.state == State.DISCOVERY
+
+
+# --- URGENCY state ---
+
+class TestUrgencyState:
+    def test_urgent_timing_routes_to_pre_confirm(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "I need someone today, ASAP")
+        assert session.urgency_tier == "urgent"
+        assert session.state == State.PRE_CONFIRM
+
+    def test_routine_timing_routes_to_pre_confirm(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "whenever this week works")
+        assert session.urgency_tier == "routine"
+        assert session.state == State.PRE_CONFIRM
+
+    def test_specific_day_routes_to_pre_confirm(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "how about tomorrow morning?")
+        assert session.state == State.PRE_CONFIRM
+
+    def test_callback_request_routes_to_urgency_callback(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "just have someone call me back")
+        assert session.state == State.URGENCY_CALLBACK
+
+    def test_high_ticket_routes_to_urgency_callback(self, sm, session):
+        session.state = State.URGENCY
+        session.lead_type = "high_ticket"
+        action = sm.process(session, "whenever works")
+        assert session.state == State.URGENCY_CALLBACK
+
+    def test_unclear_stays(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "I'm not sure")
+        assert session.state == State.URGENCY
+
+    def test_soonest_triggers_urgent(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "I was looking for the soonest available appointment")
+        assert session.urgency_tier == "urgent"
+        assert session.state == State.PRE_CONFIRM
+
+    def test_following_day_triggers_time_pattern(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "the following day, same time")
+        assert session.urgency_tier == "routine"
+        assert session.preferred_time == "the following day, same time"
+        assert session.state == State.PRE_CONFIRM
+
+    def test_next_day_triggers_time_pattern(self, sm, session):
+        session.state = State.URGENCY
+        action = sm.process(session, "next day would be fine")
+        assert session.urgency_tier == "routine"
+        assert session.state == State.PRE_CONFIRM
+
+    def test_reschedule_with_appointment_routes_to_callback(self, sm, session):
+        session.state = State.URGENCY
+        session.has_appointment = True
+        action = sm.process(session, "Can I reschedule for something later?")
+        assert session.state == State.CALLBACK
+
+    def test_reschedule_without_appointment_stays_in_urgency(self, sm, session):
+        """No false positive: 'reschedule' without an existing appointment should not trigger."""
+        session.state = State.URGENCY
+        session.has_appointment = False
+        action = sm.process(session, "Can I reschedule for something later?")
+        assert session.state == State.URGENCY  # no appointment, no redirect
+
+
+# --- PRE_CONFIRM state ---
+
+class TestPreConfirmState:
+    def test_yes_fires_booking_immediately(self, sm, session):
+        """Regression: pre_confirm "yes" must fire book_service in the same turn.
+
+        Without this, the agent says "Let me check..." but does nothing until
+        the caller speaks again — causing 30+ seconds of dead air.
+        """
+        session.state = State.PRE_CONFIRM
+        session.customer_name = "Jonas"
+        session.problem_description = "AC not cooling"
+        session.service_address = "5211 Cronkite Road"
+        session.preferred_time = "soonest available"
+        action = sm.process(session, "yes that sounds right")
+        assert session.caller_confirmed is True
+        assert session.state == State.BOOKING
+        assert action.call_tool == "book_service", "book_service must fire on the same turn as 'yes'"
+        assert session.booking_attempted is True
+        assert action.speak  # Should have a filler line for the caller
+
+    def test_callback_request_routes_to_callback(self, sm, session):
+        session.state = State.PRE_CONFIRM
+        action = sm.process(session, "just have someone call me back")
+        assert session.state == State.CALLBACK
+
+    def test_stays_for_correction(self, sm, session):
+        session.state = State.PRE_CONFIRM
+        action = sm.process(session, "actually the address is different")
+        assert session.state == State.PRE_CONFIRM
+
+
+# --- BOOKING state ---
+
+class TestBookingState:
+    def test_enters_booking_calls_tool(self, sm, session):
+        session.state = State.BOOKING
+        action = sm.process(session, "")
+        assert action.call_tool == "book_service"
+
+    def test_booking_success_routes_to_confirm(self, sm, session):
+        session.state = State.BOOKING
+        sm.handle_tool_result(session, "book_service", {
+            "booked": True,
+            "booking_time": "2026-02-15T10:00:00",
+        })
+        assert session.booking_confirmed is True
+        assert session.state == State.CONFIRM
+
+    def test_booking_failure_routes_to_booking_failed(self, sm, session):
+        session.state = State.BOOKING
+        sm.handle_tool_result(session, "book_service", {"booked": False})
+        assert session.booking_confirmed is False
+        assert session.state == State.BOOKING_FAILED
+
+    def test_booking_has_no_end_call(self, sm, session):
+        """The critical structural guarantee: booking cannot end a call."""
+        session.state = State.BOOKING
+        action = sm.process(session, "")
+        assert action.end_call is False
+
+
+# --- BOOKING_FAILED state ---
+
+class TestBookingFailedState:
+    def test_creates_callback(self, sm, session):
+        session.state = State.BOOKING_FAILED
+        action = sm.process(session, "")
+        assert action.call_tool == "create_callback"
+
+    def test_ends_call_after_callback(self, sm, session):
+        session.state = State.BOOKING_FAILED
+        session.callback_created = True
+        action = sm.process(session, "")
+        assert action.end_call is True
+
+
+# --- CONFIRM state (terminal after booking success) ---
+
+class TestConfirmState:
+    def test_ends_call(self, sm, session):
+        session.state = State.CONFIRM
+        action = sm.process(session, "")
+        assert action.end_call is True
+
+
+# --- CALLBACK state ---
+
+class TestCallbackState:
+    def test_fires_callback_tool(self, sm, session):
+        session.state = State.CALLBACK
+        action = sm.process(session, "")
+        assert action.call_tool == "create_callback"
+
+    def test_ends_call_after_callback(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"success": True})
+        action = sm.process(session, "")
+        assert action.end_call is True
+
+
+class TestCallbackToolResult:
+    def test_callback_created_true_on_success(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"success": True})
+        assert session.callback_created is True
+
+    def test_callback_created_false_on_failure(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"success": False, "error": "401 Unauthorized"})
+        assert session.callback_created is False
+
+    def test_callback_created_false_on_error_key(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"error": "V2 backend unavailable"})
+        assert session.callback_created is False
+
+    def test_callback_attempts_incremented_on_failure(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"error": "V2 backend unavailable"})
+        assert session.callback_attempts == 1
+
+    def test_callback_attempts_not_incremented_on_success(self, sm, session):
+        session.state = State.CALLBACK
+        sm.handle_tool_result(session, "create_callback", {"success": True})
+        assert session.callback_attempts == 0
+
+
+class TestCallbackRetryLimit:
+    def test_gives_up_after_max_attempts(self, sm, session):
+        session.state = State.CALLBACK
+        session.callback_attempts = 2
+        action = sm.process(session, "anything")
+        assert action.end_call is True
+        assert action.call_tool == ""
+
+    def test_retries_before_max_attempts(self, sm, session):
+        session.state = State.CALLBACK
+        session.callback_attempts = 1
+        action = sm.process(session, "anything")
+        assert action.call_tool == "create_callback"
+        assert action.end_call is False
+
+    def test_full_retry_cycle(self, sm, session):
+        """Simulate: 2 failures then give up."""
+        session.state = State.CALLBACK
+
+        # Attempt 1: fires tool
+        action = sm.process(session, "ok")
+        assert action.call_tool == "create_callback"
+        sm.handle_tool_result(session, "create_callback", {"error": "V2 backend unavailable"})
+        assert session.callback_attempts == 1
+
+        # Attempt 2: fires tool again
+        action = sm.process(session, "ok")
+        assert action.call_tool == "create_callback"
+        sm.handle_tool_result(session, "create_callback", {"error": "V2 backend unavailable"})
+        assert session.callback_attempts == 2
+
+        # Attempt 3: gives up, ends call
+        action = sm.process(session, "ok")
+        assert action.call_tool == ""
+        assert action.end_call is True
+
+
+# --- Structural guarantees ---
+
+class TestStructuralGuarantees:
+    def test_no_backward_transitions(self, sm, session):
+        """States can only move forward in the main flow."""
+        forward_order = [
+            State.WELCOME, State.LOOKUP, State.SAFETY,
+            State.SERVICE_AREA, State.DISCOVERY, State.URGENCY,
+            State.PRE_CONFIRM, State.BOOKING, State.CONFIRM,
+        ]
+        for i, state in enumerate(forward_order[:-1]):
+            valid_nexts = sm.valid_transitions(state)
+            for prev_state in forward_order[:i]:
+                assert prev_state not in valid_nexts, \
+                    f"{state.value} should not transition back to {prev_state.value}"
+
+    def test_decision_states_have_no_tools(self, sm):
+        for state in [State.WELCOME, State.SAFETY, State.DISCOVERY, State.URGENCY, State.PRE_CONFIRM]:
+            assert sm.available_tools(state) == [], \
+                f"Decision state {state.value} should have no tools"
+
+    def test_booking_has_no_end_call(self, sm):
+        assert "end_call" not in sm.available_tools(State.BOOKING)
+
+
+# --- state_turn_count reset ---
+
+class TestStateTurnCountReset:
+    """state_turn_count must reset to 0 on every state transition."""
+
+    def test_welcome_to_lookup_resets(self, sm, session):
+        session.state_turn_count = 3
+        sm.process(session, "my AC is broken")
+        assert session.state == State.LOOKUP
+        assert session.state_turn_count == 0
+
+    def test_welcome_to_non_service_resets(self, sm, session):
+        session.state_turn_count = 3
+        sm.process(session, "I have a billing question")
+        assert session.state == State.NON_SERVICE
+        assert session.state_turn_count == 0
+
+    def test_safety_to_service_area_resets(self, sm, session):
+        session.state = State.SAFETY
+        session.state_turn_count = 4
+        sm.process(session, "no")
+        assert session.state == State.SERVICE_AREA
+        assert session.state_turn_count == 0
+
+    def test_safety_to_safety_exit_resets(self, sm, session):
+        session.state = State.SAFETY
+        session.state_turn_count = 3
+        sm.process(session, "yes I smell gas")
+        assert session.state == State.SAFETY_EXIT
+        assert session.state_turn_count == 0
+
+    def test_discovery_to_urgency_resets(self, sm, session):
+        session.state = State.DISCOVERY
+        session.state_turn_count = 4
+        session.customer_name = "Jonas"
+        session.problem_description = "AC broken"
+        session.service_address = "123 Main St"
+        sm.process(session, "")
+        assert session.state == State.URGENCY
+        assert session.state_turn_count == 0
+
+    def test_pre_confirm_to_booking_resets(self, sm, session):
+        session.state = State.PRE_CONFIRM
+        session.state_turn_count = 3
+        action = sm.process(session, "yes go ahead")
+        assert session.state == State.BOOKING
+        assert session.state_turn_count == 0
+        assert action.call_tool == "book_service"
+
+    def test_pre_confirm_to_callback_resets(self, sm, session):
+        session.state = State.PRE_CONFIRM
+        session.state_turn_count = 3
+        sm.process(session, "just have someone call me back")
+        assert session.state == State.CALLBACK
+        assert session.state_turn_count == 0
+
+    def test_safety_fragments_dont_leak_into_service_area(self, sm, session):
+        """Reproduces the actual bug from call CA2dbef953072c9722864a35abc3639b22.
+
+        3 transcription fragments in SAFETY inflated state_turn_count to 4.
+        After transition to SERVICE_AREA, 2 more turns pushed it to 6,
+        exceeding MAX_TURNS_PER_STATE (5) and falsely escalating to CALLBACK.
+        """
+        # Simulate: enter SAFETY after lookup
+        session.state = State.SAFETY
+        session.state_turn_count = 0
+
+        # 3 fragments from Deepgram STT
+        sm.process(session, "Yeah.")
+        sm.process(session, "Mhmm.")
+        sm.process(session, "Yeah. It's a broken cover.")
+        assert session.state == State.SAFETY  # still in SAFETY
+
+        # Actual safety response
+        sm.process(session, "No.")
+        assert session.state == State.SERVICE_AREA
+        assert session.state_turn_count == 0  # BUG: was 5 before fix
+
+        # Two SERVICE_AREA turns should NOT trigger turn limit
+        sm.process(session, "Combat Road")
+        assert session.state == State.SERVICE_AREA
+
+        sm.process(session, "seven eight seven zero one")
+        assert session.state == State.DISCOVERY  # BUG: was CALLBACK before fix
+
+    def test_turn_limit_still_fires_within_state(self, sm, session):
+        """Turn limit must still work when exchanges accumulate in a single state."""
+        session.state = State.SAFETY
+        session.state_turn_count = 0
+
+        # 6 exchanges in SAFETY (exceeds MAX_TURNS_PER_STATE=5)
+        for _ in range(5):
+            session.agent_has_responded = True  # simulate agent asking a question
+            sm.process(session, "what do you mean?")
+        assert session.state == State.SAFETY
+
+        session.agent_has_responded = True
+        sm.process(session, "what?")
+        assert session.state == State.CALLBACK  # turn limit fires
+
+
+class TestExchangeBasedTurnCounting:
+    """state_turn_count increments on exchanges, not raw STT frames."""
+
+    def test_consecutive_fragments_count_as_one_turn(self, sm, session):
+        """6 consecutive user frames without agent response = 1 state turn."""
+        session.state = State.DISCOVERY
+        session.agent_has_responded = True  # agent asked a question
+
+        sm.process(session, "Okay it's")
+        sm.process(session, "four three two nine")
+        sm.process(session, "Franklin Street")
+        sm.process(session, "Franklin")
+        sm.process(session, "Austin")
+        sm.process(session, "Texas")
+
+        assert session.state_turn_count == 1  # all one exchange
+
+    def test_turn_increments_after_agent_responds(self, sm, session):
+        """Agent response + next user frame = new exchange."""
+        session.state = State.DISCOVERY
+        session.agent_has_responded = True  # agent asked a question
+
+        sm.process(session, "the unit is making a loud noise")
+        assert session.state_turn_count == 1
+
+        # Simulate agent responding
+        session.agent_has_responded = True
+
+        sm.process(session, "it started yesterday")
+        assert session.state_turn_count == 2
+
+    def test_first_utterance_without_agent_response_no_increment(self, sm, session):
+        """If agent hasn't responded yet, don't increment state turn."""
+        session.state = State.DISCOVERY
+        session.agent_has_responded = False
+
+        sm.process(session, "hello")
+        assert session.state_turn_count == 0
+
+    def test_transition_resets_agent_has_responded(self, sm, session):
+        """State transition must reset agent_has_responded to False."""
+        session.state = State.SAFETY
+        session.agent_has_responded = True
+        sm.process(session, "no")  # triggers transition to SERVICE_AREA
+        assert session.state == State.SERVICE_AREA
+        assert session.agent_has_responded is False
+
+    def test_per_call_turn_count_always_increments(self, sm, session):
+        """Per-call turn_count increments on every frame regardless."""
+        session.state = State.DISCOVERY
+        session.agent_has_responded = False
+
+        sm.process(session, "fragment one")
+        sm.process(session, "fragment two")
+        sm.process(session, "fragment three")
+
+        assert session.turn_count == 3  # always increments
+        assert session.state_turn_count == 0  # no agent response, no state-turn increment
+
+    def test_discovery_address_fragments_dont_trigger_callback(self, sm, session):
+        """Regression: call CA4e393da — address fragments exhausted turn limit.
+
+        Real call had caller dictate address in 5 STT fragments in discovery,
+        burning through MAX_TURNS_PER_STATE and escalating to CALLBACK before
+        the agent could ask a follow-up question.
+        """
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC not cooling"
+        session.agent_has_responded = True  # agent asked for address
+
+        # Caller dictates address in 5 fragments (real Deepgram STT behavior)
+        sm.process(session, "Okay it's")
+        sm.process(session, "four three two nine")
+        sm.process(session, "Franklin Street")
+        sm.process(session, "Franklin")
+        sm.process(session, "Austin Texas")
+
+        # Should still be in DISCOVERY, NOT escalated to CALLBACK
+        assert session.state == State.DISCOVERY
+        assert session.state_turn_count == 1
+
+        # Now set address and verify progression to URGENCY
+        session.service_address = "4329 Franklin Street"
+        session.agent_has_responded = True
+        sm.process(session, "yeah that's right")
+        assert session.state == State.URGENCY
+
+
+class TestRegressionCA76a150a:
+    """Regression: call CA76a150a stalled 107s in URGENCY because 'soonest'
+    wasn't recognized. Proves urgency signals fire before reschedule detection."""
+
+    def test_soonest_with_appointment_routes_to_pre_confirm(self, sm, session):
+        """Priority: urgency signals must fire before reschedule detection.
+        Caller has an appointment but said 'soonest' — should book, not callback."""
+        session.state = State.URGENCY
+        session.has_appointment = True
+        session.appointment_date = "2026-02-19"
+        session.appointment_time = "3:45 PM"
+        sm.process(session, "I was looking for the soonest available appointment")
+        assert session.state == State.PRE_CONFIRM
+        assert session.urgency_tier == "urgent"
+
+
+# --- Terminal state scripts ---
+
+class TestTerminalScripts:
+    def test_callback_has_canned_script(self):
+        from calllock.state_machine import TERMINAL_SCRIPTS
+        assert State.CALLBACK in TERMINAL_SCRIPTS
+        assert "call you back" in TERMINAL_SCRIPTS[State.CALLBACK]
+
+    def test_booking_failed_has_canned_script(self):
+        from calllock.state_machine import TERMINAL_SCRIPTS
+        assert State.BOOKING_FAILED in TERMINAL_SCRIPTS
+
+    def test_safety_exit_has_canned_script(self):
+        from calllock.state_machine import TERMINAL_SCRIPTS
+        assert State.SAFETY_EXIT in TERMINAL_SCRIPTS
+        assert "911" in TERMINAL_SCRIPTS[State.SAFETY_EXIT]
+
+    def test_booking_language_filter_exists(self):
+        from calllock.state_machine import BOOKING_LANGUAGE
+        assert "appointment" in BOOKING_LANGUAGE
+        assert "schedule" in BOOKING_LANGUAGE
+
+    def test_booking_language_detected(self):
+        from calllock.state_machine import BOOKING_LANGUAGE
+        from calllock.validation import match_any_keyword
+        assert match_any_keyword("Let me schedule that appointment", BOOKING_LANGUAGE) is True
+        assert match_any_keyword("I'm the virtual receptionist", BOOKING_LANGUAGE) is False
+
+
+class TestJonasCallRegression:
+    """Regression test for Jonas call CA1fd951b84d358e00b0fe7cc9464430ba.
+
+    Bug: "not" matched "no" via substring, and 4-digit ZIP fragment was
+    processed by async extraction before the handler could set the correct
+    5-digit ZIP, routing the call to CALLBACK instead of DISCOVERY.
+    """
+
+    def test_caller_gives_correct_zip_after_wrong_fragments(self, sm, session):
+        """Simulate the exact Jonas call sequence."""
+        # WELCOME: service intent → LOOKUP
+        session.state = State.WELCOME
+        sm.process(session, "Yeah I'm having a problem with my air conditioning")
+        assert session.state == State.LOOKUP
+
+        # LOOKUP tool result
+        sm.handle_tool_result(session, "lookup_caller", {
+            "found": True,
+            "customerName": "Jonas",
+        })
+        assert session.state == State.SAFETY
+
+        # SAFETY: "not" should NOT match "no" signal (the substring bug)
+        sm.process(session, "It's not it doesn't come on all the time")
+        assert session.state == State.SAFETY
+
+        # SAFETY: explicit "no" clears safety
+        sm.process(session, "No nothing like that")
+        assert session.state == State.SERVICE_AREA
+
+        # SERVICE_AREA: first attempt has only 4 digits
+        sm.process(session, "seven eight zero one")
+        # words_to_digits → "7801" (4 digits), no 5-digit match
+        assert session.state == State.SERVICE_AREA
+
+        # SERVICE_AREA: correct 5-digit ZIP
+        sm.process(session, "Seven eight seven zero one")
+        # words_to_digits → "78701", valid, in service area
+        assert session.state == State.DISCOVERY  # NOT CALLBACK

@@ -1,0 +1,12 @@
+pipecat-ai[cartesia,deepgram,elevenlabs,inworld,openai,silero]>=0.0.60
+fastapi>=0.115.0
+uvicorn>=0.32.0
+httpx>=0.27.0
+python-dotenv>=1.0.0
+aiohttp>=3.9.0
+
+[dev]
+pytest>=8.0
+pytest-asyncio>=0.24.0
+pytest-mock>=3.14.0
+respx>=0.22.0
