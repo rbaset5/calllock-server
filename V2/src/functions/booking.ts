@@ -7,6 +7,27 @@ import { fetchWithRetry, FetchError } from "../utils/fetch.js";
 
 const log = createModuleLogger("booking");
 
+/**
+ * Format an ISO datetime for Austin, TX (America/Chicago).
+ * Always uses CST/CDT regardless of server timezone.
+ */
+export function formatBookingTime(isoDate: string): { dateStr: string; timeStr: string } {
+  const dt = new Date(isoDate);
+  const dateStr = dt.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    timeZone: "America/Chicago",
+  });
+  const timeStr = dt.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/Chicago",
+  });
+  return { dateStr, timeStr };
+}
+
 const CAL_COM_API_KEY = process.env.CAL_COM_API_KEY;
 const CAL_COM_EVENT_TYPE_ID = process.env.CAL_COM_EVENT_TYPE_ID || "3877847";
 const CAL_API_BASE = "https://api.cal.com/v2";
@@ -117,17 +138,7 @@ async function createCalComBooking(
   log.info({ bookingUid: data.data.uid }, "Cal.com booking created");
 
   // Parse the booking response
-  const startTime = new Date(data.data.startTime);
-  const dateStr = startTime.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-  const timeStr = startTime.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  const { dateStr, timeStr } = formatBookingTime(data.data.startTime);
 
   return {
     success: true,
@@ -146,17 +157,7 @@ function generateMockBookingConfirmation(
 ): BookAppointmentResult {
   const appointmentId = `apt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-  const dateTime = new Date(params.dateTime);
-  const dateStr = dateTime.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-  const timeStr = dateTime.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  const { dateStr, timeStr } = formatBookingTime(params.dateTime);
 
   log.info({ appointmentId }, "Generated mock booking");
 
