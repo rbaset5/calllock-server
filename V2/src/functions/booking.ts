@@ -134,6 +134,7 @@ async function createCalComBooking(
     booking_confirmed: true,
     appointmentId: data.data.uid,
     confirmationMessage: `Appointment confirmed for ${dateStr} at ${timeStr}`,
+    appointment_time: data.data.startTime,
   };
 }
 
@@ -164,6 +165,7 @@ function generateMockBookingConfirmation(
     booking_confirmed: true,
     appointmentId,
     confirmationMessage: `Appointment confirmed for ${dateStr} at ${timeStr}`,
+    appointment_time: params.dateTime,
   };
 }
 

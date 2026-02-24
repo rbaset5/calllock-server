@@ -189,6 +189,7 @@ export interface BookAppointmentResult {
   booking_confirmed: boolean;
   appointmentId?: string;
   confirmationMessage: string;
+  appointment_time?: string;  // ISO 8601 datetime from Cal.com
 }
 
 export interface ValidateServiceAreaParams {
