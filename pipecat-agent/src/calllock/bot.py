@@ -9,6 +9,14 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+# Suppress Pipecat "StartFrame not received" cosmetic noise that floods Fly.io log buffer.
+# Uses a targeted filter (not setLevel) to preserve real frame processor errors.
+class _StartFrameNoiseFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "StartFrame not received" not in record.getMessage()
+
+logging.getLogger("pipecat.processors.frame_processor").addFilter(_StartFrameNoiseFilter())
+
 import uvicorn  # noqa: E402
 from dotenv import load_dotenv  # noqa: E402
 from fastapi import FastAPI, Request, WebSocket  # noqa: E402
