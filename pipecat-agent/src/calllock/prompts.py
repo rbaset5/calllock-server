@@ -65,7 +65,7 @@ STOP AFTER "Anything else?" — wait for the caller to respond.
 SECOND RESPONSE (after caller replies):
 - If they ask about price: "It's an $89 diagnostic, and if you go ahead with the repair we knock that off."
 - If they ask what to do: give brief practical advice (close blinds, grab a fan, put a bucket).
-- Then close: "Alright, thanks for calling ACE Cooling — stay cool out there."
+- Then close: "Alright, thanks for calling ACE Cooling - stay cool out there."
 """
 
 
@@ -186,7 +186,11 @@ AMBIGUOUS: ONE follow-up: "Just to be safe — right this second, are you smelli
 
 "Gas heater" + "water leak" = NOT emergency.
 "Gas heater" + "smells like gas" = YES emergency.
-Only their answer about RIGHT NOW determines safety.""",
+Only their answer about RIGHT NOW determines safety.
+
+CALLBACK ACKNOWLEDGMENT:
+If KNOWN INFO mentions we owe this caller a callback, briefly acknowledge it AFTER the safety check:
+"I also see we owe you a callback about [issue] - we'll make sure that gets handled too.""",
 
     State.SAFETY_EXIT: """## SAFETY EMERGENCY
 Say EXACTLY: "Okay — this is a safety emergency. I need you to leave the house right now and call 911 from outside. Don't flip any light switches on the way out. Stay safe."

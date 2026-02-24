@@ -94,7 +94,7 @@ YES_SIGNALS = frozenset({
     "correct", "that's right", "go ahead",
 })
 CONFIRM_CLOSE_SIGNALS = frozenset({
-    "no", "nope", "nah", "thanks", "thank you", "bye", "goodbye",
+    "thanks", "thank you", "bye", "goodbye",
     "that's it", "that's all", "all good", "i'm good", "nothing else",
 })
 
@@ -327,7 +327,7 @@ class StateMachine:
         if match_any_keyword(text, CONFIRM_CLOSE_SIGNALS) or not text.strip():
             # Common close -> canned response, skip LLM
             return Action(
-                speak="Alright, thanks for calling ACE Cooling — stay cool out there.",
+                speak="Alright, thanks for calling ACE Cooling - stay cool out there.",
                 end_call=True,
                 needs_llm=False,
             )

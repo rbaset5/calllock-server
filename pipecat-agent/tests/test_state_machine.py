@@ -558,6 +558,60 @@ class TestConfirmTwoTurn:
 
 # --- CALLBACK state ---
 
+
+class TestConfirmCloseSignalBoundary:
+    """'no'/'nope'/'nah' are ambiguous after 'Anything else?' — must route to LLM, not canned close."""
+
+    def test_bare_no_routes_to_llm(self, sm, session):
+        """'No' alone should route to LLM (caller may continue), but still end call."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "No.")
+        assert action.needs_llm is True
+        assert action.end_call is True
+        assert action.speak == ""
+
+    def test_nope_routes_to_llm(self, sm, session):
+        """'Nope' alone should route to LLM."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "Nope.")
+        assert action.needs_llm is True
+
+    def test_thanks_still_triggers_canned_close(self, sm, session):
+        """'Thanks' is unambiguous — should still trigger canned close."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "Thanks!")
+        assert action.end_call is True
+        assert action.needs_llm is False
+
+    def test_goodbye_still_triggers_canned_close(self, sm, session):
+        """'Goodbye' is unambiguous — should still trigger canned close."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "Goodbye.")
+        assert action.end_call is True
+        assert action.needs_llm is False
+
+    def test_nothing_else_still_triggers_canned_close(self, sm, session):
+        """'Nothing else' is unambiguous — should still trigger canned close."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "Nothing else, thanks.")
+        assert action.end_call is True
+        assert action.needs_llm is False
+
 class TestCallbackState:
     def test_fires_callback_tool(self, sm, session):
         session.state = State.CALLBACK
