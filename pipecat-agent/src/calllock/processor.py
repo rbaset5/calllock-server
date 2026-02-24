@@ -17,7 +17,7 @@ from calllock.session import CallSession
 from calllock.state_machine import StateMachine, Action, TERMINAL_SCRIPTS, TERMINAL_SCOPED_PROMPT, BOOKING_LANGUAGE
 from calllock.prompts import get_system_prompt
 from calllock.extraction import extract_fields
-from calllock.validation import validate_name, validate_zip, validate_address, match_any_keyword
+from calllock.validation import validate_name, validate_zip, validate_address, match_any_keyword, resolve_booking_time
 from calllock.tools import V2Client
 
 logger = logging.getLogger(__name__)
@@ -327,7 +327,7 @@ class StateMachineProcessor(FrameProcessor):
                 customer_name=self.session.customer_name,
                 problem=self.session.problem_description,
                 address=self.session.service_address,
-                preferred_time=self.session.preferred_time,
+                preferred_time=resolve_booking_time(self.session.preferred_time),
                 phone=self.session.phone_number,
             )
         elif tool == "create_callback":

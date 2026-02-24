@@ -92,9 +92,9 @@ class V2Client:
                     "args": {
                         "customer_name": customer_name,
                         "customer_phone": phone,
-                        "issue_description": problem,
+                        "problem_description": problem,
                         "service_address": address,
-                        "preferred_time": preferred_time,
+                        "date_time": preferred_time,
                     },
                 },
             )
