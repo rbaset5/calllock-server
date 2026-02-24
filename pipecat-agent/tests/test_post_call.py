@@ -4,6 +4,7 @@ import pytest
 import httpx
 import respx
 import time
+from unittest.mock import AsyncMock
 from calllock.post_call import handle_call_ended, build_job_payload, build_call_payload, chunk_transcript_dump
 from calllock.session import CallSession
 from calllock.states import State
@@ -96,6 +97,18 @@ class TestBuildJobPayload:
         assert "HAZARD" in payload["tags"]
         assert isinstance(payload["priority_color"], str)
         assert isinstance(payload["revenue_tier"], str)
+
+    def test_booking_confirmed_sets_is_ai_booked(self, completed_session):
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="owner@test.com")
+        assert payload["is_ai_booked"] is True
+
+    def test_callback_session_no_is_ai_booked(self):
+        s = CallSession(phone_number="+15125551234")
+        s.call_sid = "CA_test_789"
+        s.start_time = 1000.0
+        s.state = State.CALLBACK
+        payload = build_job_payload(s, end_time=1015.0, user_email="owner@test.com")
+        assert payload.get("is_ai_booked") is None
 
 
 class TestBuildCallPayload:
@@ -200,18 +213,30 @@ class TestHandleCallEnded:
 
 
 class TestCallLeadLinking:
-    def test_call_payload_includes_lead_id(self):
+    def test_call_payload_includes_lead_id_when_present(self):
         s = CallSession(phone_number="+15125551234")
         s.customer_name = "Jonas"
         s.start_time = 1000.0
         payload = build_call_payload(s, end_time=1070.0, user_email="test@test.com", lead_id="abc-123")
         assert payload["lead_id"] == "abc-123"
 
-    def test_call_payload_without_lead_id(self):
+    def test_call_payload_omits_lead_id_when_none(self):
         s = CallSession(phone_number="+15125551234")
         s.start_time = 1000.0
         payload = build_call_payload(s, end_time=1070.0, user_email="test@test.com")
-        assert payload.get("lead_id") is None
+        assert "lead_id" not in payload
+
+    def test_call_payload_includes_job_id_when_present(self):
+        s = CallSession(phone_number="+15125551234")
+        s.start_time = 1000.0
+        payload = build_call_payload(s, end_time=1070.0, user_email="test@test.com", job_id="job-456")
+        assert payload["job_id"] == "job-456"
+
+    def test_call_payload_omits_job_id_when_none(self):
+        s = CallSession(phone_number="+15125551234")
+        s.start_time = 1000.0
+        payload = build_call_payload(s, end_time=1070.0, user_email="test@test.com")
+        assert "job_id" not in payload
 
 
 class TestUrgencyMapping:
@@ -244,6 +269,11 @@ class TestUrgencyMapping:
         completed_session.urgency_tier = ""
         payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
         assert payload["urgency"] == "low"
+
+    def test_urgent_maps_to_high(self, completed_session):
+        completed_session.urgency_tier = "urgent"
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="o@t.com")
+        assert payload["urgency"] == "high"
 
 
 class TestTranscriptFiltering:
@@ -416,3 +446,45 @@ class TestTranscriptDumpEmission:
         payload = json.loads(dump_lines[0].split("|", 2)[2])
         assert payload["call_sid"] == "CA_test_123"
         assert len(payload["entries"]) > 0
+
+
+class TestClassificationIntegration:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_classification_fields_merged_into_job_payload(self, completed_session, monkeypatch):
+        monkeypatch.setenv("DASHBOARD_JOBS_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_CALLS_URL", "https://app.example.com/api/webhook/calls")
+        monkeypatch.setenv("DASHBOARD_ALERTS_URL", "https://app.example.com/api/webhook/emergency-alerts")
+        monkeypatch.setenv("DASHBOARD_WEBHOOK_SECRET", "test-secret")
+        monkeypatch.setenv("DASHBOARD_USER_EMAIL", "owner@test.com")
+
+        mock_classification = {
+            "ai_summary": "Jonas called about AC not cooling.",
+            "card_headline": "AC Not Blowing Cold",
+            "card_summary": "Service call for AC repair.",
+            "call_type": "SERVICE",
+            "call_subtype": "REPAIR_AC",
+            "sentiment_score": 4,
+        }
+        monkeypatch.setattr(
+            "calllock.post_call.classify_call",
+            AsyncMock(return_value=mock_classification),
+        )
+
+        captured_payload = {}
+
+        def capture_job(request):
+            captured_payload.update(json.loads(request.content))
+            return httpx.Response(200, json={"success": True, "job_id": "job-123", "lead_id": "lead-456"})
+
+        respx.post("https://app.example.com/api/webhook/jobs").mock(side_effect=capture_job)
+        respx.post("https://app.example.com/api/webhook/calls").mock(
+            return_value=httpx.Response(200, json={"success": True})
+        )
+
+        await handle_call_ended(completed_session)
+
+        assert captured_payload.get("ai_summary") == "Jonas called about AC not cooling."
+        assert captured_payload.get("card_headline") == "AC Not Blowing Cold"
+        assert captured_payload.get("call_type") == "SERVICE"
+        assert captured_payload.get("sentiment_score") == 4

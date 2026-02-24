@@ -43,8 +43,24 @@ RULES
 
 def get_system_prompt(session: CallSession) -> str:
     state_prompt = STATE_PROMPTS.get(session.state, "")
+    if session.state == State.CONFIRM and session.confirmation_message:
+        state_prompt = _confirm_prompt(session.confirmation_message)
     context = _build_context(session)
     return f"{PERSONA}\n\n{context}\n\n{state_prompt}"
+
+
+def _confirm_prompt(confirmation_message: str) -> str:
+    return f"""## CONFIRM
+Wrap up after successful booking.
+
+BOOKING CONFIRMED: {confirmation_message}
+
+Tell the caller their appointment details from the booking above. Then add: "The tech will call about 30 minutes before heading over."
+
+Price question: "It's an $89 diagnostic, and if you go ahead with the repair we knock that off."
+"What should I do until then?" — give practical advice (close blinds, grab a fan, put a bucket).
+
+Close: "Anything else? ... Alright, thanks for calling ACE Cooling — stay cool out there." """
 
 
 def _build_context(session: CallSession) -> str:

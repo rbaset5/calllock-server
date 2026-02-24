@@ -1,4 +1,6 @@
-from calllock.classification import classify_tags, detect_priority, estimate_revenue_tier
+import pytest
+from unittest.mock import AsyncMock, patch, MagicMock
+from calllock.classification import classify_tags, detect_priority, estimate_revenue_tier, classify_call
 from calllock.session import CallSession
 from calllock.states import State
 
@@ -150,3 +152,93 @@ class TestEstimateRevenueTier:
     def test_result_has_confidence(self):
         result = estimate_revenue_tier("new system replacement", [])
         assert result["confidence"] in ("low", "medium", "high")
+
+
+def _mock_openai_response(content: str):
+    """Helper to create a mock httpx response for OpenAI chat completions."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": content}}]
+    }
+    mock_resp.raise_for_status = MagicMock()
+    return mock_resp
+
+
+class TestClassifyCall:
+    @pytest.mark.asyncio
+    @patch("calllock.classification.httpx.AsyncClient")
+    async def test_returns_all_fields(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        mock_resp = _mock_openai_response(
+            '{"ai_summary": "Customer called about AC not cooling.", '
+            '"card_headline": "AC Not Blowing Cold", '
+            '"card_summary": "Jonas called about AC unit not blowing cold air.", '
+            '"call_type": "SERVICE", '
+            '"call_subtype": "REPAIR_AC", '
+            '"sentiment_score": 4}'
+        )
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.CONFIRM
+        session.customer_name = "Jonas"
+        session.booking_confirmed = True
+        result = await classify_call(session, "Customer called about AC issue.")
+
+        assert result["ai_summary"] == "Customer called about AC not cooling."
+        assert result["card_headline"] == "AC Not Blowing Cold"
+        assert result["call_type"] == "SERVICE"
+        assert result["sentiment_score"] == 4
+
+    @pytest.mark.asyncio
+    @patch("calllock.classification.httpx.AsyncClient")
+    async def test_returns_empty_on_api_failure(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=Exception("API timeout"))
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        session = CallSession(phone_number="+15125551234")
+        result = await classify_call(session, "Some transcript")
+
+        assert result == {}
+
+    @pytest.mark.asyncio
+    @patch("calllock.classification.httpx.AsyncClient")
+    async def test_clamps_sentiment_score(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        mock_resp = _mock_openai_response(
+            '{"ai_summary": "Test.", "card_headline": "Test", '
+            '"card_summary": "Test.", "call_type": "SERVICE", '
+            '"call_subtype": null, "sentiment_score": 7}'
+        )
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        session = CallSession(phone_number="+15125551234")
+        result = await classify_call(session, "Transcript text")
+
+        assert result["sentiment_score"] == 5  # clamped to max
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_missing_api_key(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        session = CallSession(phone_number="+15125551234")
+        result = await classify_call(session, "Some transcript")
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_empty_transcript(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        session = CallSession(phone_number="+15125551234")
+        result = await classify_call(session, "   ")
+        assert result == {}

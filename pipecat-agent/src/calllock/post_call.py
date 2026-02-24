@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from calllock.session import CallSession
 from calllock.states import State
 from calllock.transcript import to_plain_text, to_json_array, to_timestamped_dump
-from calllock.classification import classify_tags, detect_priority, estimate_revenue_tier
+from calllock.classification import classify_tags, detect_priority, estimate_revenue_tier, classify_call
 from calllock.dashboard_sync import DashboardClient
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ _URGENCY_MAP = {
     "low": "low",
     "medium": "medium",
     "high": "high",
+    "urgent": "high",
     "emergency": "emergency",
 }
 
@@ -98,18 +99,20 @@ def build_job_payload(session: CallSession, end_time: float, user_email: str) ->
     # Conditional fields
     if session.booking_confirmed and session.booked_time:
         payload["scheduled_at"] = session.booked_time
+    if session.booking_confirmed:
+        payload["is_ai_booked"] = True
 
     return payload
 
 
-def build_call_payload(session: CallSession, end_time: float, user_email: str, lead_id: str | None = None) -> dict:
+def build_call_payload(session: CallSession, end_time: float, user_email: str, lead_id: str | None = None, job_id: str | None = None) -> dict:
     """Build the call record payload."""
     now_dt = datetime.now(timezone.utc).isoformat()
     start_dt = datetime.fromtimestamp(session.start_time, tz=timezone.utc).isoformat() if session.start_time > 0 else now_dt
     end_dt = datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat() if end_time > 0 else now_dt
     duration = int(end_time - session.start_time) if session.start_time > 0 else 0
 
-    return {
+    payload = {
         "call_id": session.call_sid,
         "phone_number": session.phone_number or "unknown",
         "customer_name": session.customer_name,
@@ -119,15 +122,19 @@ def build_call_payload(session: CallSession, end_time: float, user_email: str, l
         "duration_seconds": duration,
         "direction": "inbound",
         "outcome": _derive_end_call_reason(session),
-        "urgency_tier": session.urgency_tier,
+        "urgency_tier": _map_urgency(session.urgency_tier),
         "problem_description": session.problem_description,
         "booking_status": _derive_booking_status(session),
-        "lead_id": lead_id,
         "transcript_object": [
             e for e in to_json_array(session.transcript_log)
             if e.get("role") in ("agent", "user")
         ],
     }
+    if lead_id:
+        payload["lead_id"] = lead_id
+    if job_id:
+        payload["job_id"] = job_id
+    return payload
 
 
 def chunk_transcript_dump(dump: dict, max_bytes: int = 3500) -> list[str]:
@@ -198,20 +205,28 @@ async def handle_call_ended(session: CallSession):
         webhook_secret=webhook_secret,
     )
 
-    # 1. Send job/lead
+    # 1. Run LLM classification for display fields
+    transcript_text = to_plain_text(session.transcript_log)
+    classification = await classify_call(session, transcript_text)
+
+    # 2. Send job/lead (with classification fields merged)
     job_payload = build_job_payload(session, end_time, user_email)
+    for key in ("ai_summary", "card_headline", "card_summary", "call_type", "call_subtype", "sentiment_score"):
+        if classification.get(key) is not None:
+            job_payload[key] = classification[key]
     job_result = await dashboard.send_job(job_payload)
     logger.info(f"Dashboard job sync: {job_result}")
 
-    # Extract lead_id for call-lead linking
+    # Extract lead_id and job_id for call linking
     lead_id = job_result.get("lead_id") if isinstance(job_result, dict) else None
+    job_id = job_result.get("job_id") if isinstance(job_result, dict) else None
 
-    # 2. Send call record (linked to lead)
-    call_payload = build_call_payload(session, end_time, user_email, lead_id=lead_id)
+    # 3. Send call record (linked to lead and job)
+    call_payload = build_call_payload(session, end_time, user_email, lead_id=lead_id, job_id=job_id)
     call_result = await dashboard.send_call(call_payload)
     logger.info(f"Dashboard call sync: {call_result}")
 
-    # 3. Send emergency alert if safety exit
+    # 4. Send emergency alert if safety exit
     if session.state == State.SAFETY_EXIT:
         alert_payload = {
             "call_id": session.call_sid,
@@ -226,7 +241,7 @@ async def handle_call_ended(session: CallSession):
         alert_result = await dashboard.send_emergency_alert(alert_payload)
         logger.info(f"Dashboard emergency alert: {alert_result}")
 
-    # 4. Emit structured transcript dump for CLI retrieval
+    # 5. Emit structured transcript dump for CLI retrieval
     end_duration = round(end_time - session.start_time, 1) if session.start_time > 0 else 0
     dump = to_timestamped_dump(
         session.transcript_log,
