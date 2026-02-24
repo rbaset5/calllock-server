@@ -172,3 +172,22 @@ class TestBuildContextBookingDetails:
 
         context = _build_context(session)
         assert "Monday, February 24" not in context
+
+
+class TestCallbackPromiseInSafety:
+    """Callback promise should appear in SAFETY prompt for service-intent callers."""
+
+    def test_safety_prompt_includes_callback_promise(self):
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.SAFETY
+        session.callback_promise = "{'date': 'today', 'issue': 'being really loud'}"
+        prompt = get_system_prompt(session)
+        assert "callback" in prompt.lower()
+        assert "being really loud" in prompt
+
+    def test_safety_prompt_without_promise_unchanged(self):
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.SAFETY
+        session.callback_promise = ""
+        prompt = get_system_prompt(session)
+        assert "we owe this caller a callback:" not in prompt.lower()
