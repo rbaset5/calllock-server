@@ -42,9 +42,10 @@ RULES
 
 
 def get_system_prompt(session: CallSession) -> str:
-    state_prompt = STATE_PROMPTS.get(session.state, "")
-    if session.state == State.CONFIRM and session.confirmation_message:
-        state_prompt = _confirm_prompt(session.confirmation_message)
+    if session.state == State.CONFIRM:
+        state_prompt = _confirm_prompt(session.confirmation_message or "Booking confirmed")
+    else:
+        state_prompt = STATE_PROMPTS.get(session.state, "")
     context = _build_context(session)
     return f"{PERSONA}\n\n{context}\n\n{state_prompt}"
 
@@ -55,12 +56,17 @@ Wrap up after successful booking.
 
 BOOKING CONFIRMED: {confirmation_message}
 
-Tell the caller their appointment details from the booking above. Then add: "The tech will call about 30 minutes before heading over."
+IMPORTANT: Use the EXACT date and time from the booking above. NEVER paraphrase "Wednesday" as "today" or "tomorrow."
 
-Price question: "It's an $89 diagnostic, and if you go ahead with the repair we knock that off."
-"What should I do until then?" — give practical advice (close blinds, grab a fan, put a bucket).
+FIRST RESPONSE: Tell the caller their appointment details from the booking above. Then: "The tech will call about 30 minutes before heading over. Anything else I can help with?"
 
-Close: "Anything else? ... Alright, thanks for calling ACE Cooling — stay cool out there." """
+STOP AFTER "Anything else?" — wait for the caller to respond.
+
+SECOND RESPONSE (after caller replies):
+- If they ask about price: "It's an $89 diagnostic, and if you go ahead with the repair we knock that off."
+- If they ask what to do: give brief practical advice (close blinds, grab a fan, put a bucket).
+- Then close: "Alright, thanks for calling ACE Cooling — stay cool out there."
+"""
 
 
 def _build_context(session: CallSession) -> str:
@@ -210,8 +216,9 @@ Paraphrase their problem professionally. No diagnostic questions — the tech ha
 If caller mentions equipment type or how long the problem has been going on, note it, but do NOT ask separately.
 
 BLOCKING: Do NOT proceed without a real street address.
-Do NOT ask about timing — that's handled next.
-Do NOT read back a summary — that's handled next.""",
+Do NOT ask about timing, scheduling, or availability — that's handled automatically in the next step.
+Do NOT read back a summary — that's handled automatically in the next step.
+When all three items are collected, STOP. Say nothing about next steps. The system transitions automatically.""",
 
     State.URGENCY: """## URGENCY
 Determine scheduling priority.
@@ -262,16 +269,6 @@ Booking didn't work. Offer callback.
 
 YES: confirm callback.
 NO: "No problem — you can call us back anytime." """,
-
-    State.CONFIRM: """## CONFIRM
-Wrap up after successful booking.
-
-Read the booking details, then add: "The tech will call about 30 minutes before heading over."
-
-Price question: "It's an $89 diagnostic, and if you go ahead with the repair we knock that off."
-"What should I do until then?" — give practical advice (close blinds, grab a fan, put a bucket).
-
-Close: "Anything else? ... Alright, thanks for calling ACE Cooling — stay cool out there." """,
 
     State.CALLBACK: """## CALLBACK
 Fallback state. Create callback and wrap up.

@@ -127,10 +127,12 @@ class TestEndCallAfterLLM:
     @pytest.mark.asyncio
     async def test_end_call_with_llm_schedules_endframe(self, processor):
         """When end_call=True and needs_llm=True, EndFrame should be scheduled after delay."""
-        # Put session in CONFIRM state — triggers end_call=True, needs_llm=True
+        # Put session in CONFIRM state second turn — triggers end_call=True, needs_llm=True
         processor.session.state = State.CONFIRM
+        processor.session.state_turn_count = 1
+        processor.session.agent_has_responded = True
 
-        frame = TranscriptionFrame(text="Thanks bye", user_id="", timestamp="")
+        frame = TranscriptionFrame(text="How much does the diagnostic cost?", user_id="", timestamp="")
         await processor._handle_transcription(frame)
 
         # Transcription frame should be pushed downstream for LLM

@@ -79,7 +79,10 @@ NO_SIGNALS = frozenset({
     "no", "nope", "nah", "nothing like that", "we're fine",
     "all good", "just not cooling", "just not heating",
 })
-URGENT_SIGNALS = frozenset({"today", "asap", "right away", "as soon as", "emergency", "right now", "soonest"})
+URGENT_SIGNALS = frozenset({
+    "today", "asap", "right away", "as soon as", "emergency", "right now", "soonest",
+    "urgent", "immediately", "earliest", "soon as possible",
+})
 ROUTINE_SIGNALS = frozenset({"whenever", "this week", "next few days", "no rush", "not urgent"})
 TIME_PATTERNS = frozenset({
     "tomorrow", "monday", "tuesday", "wednesday", "thursday",
@@ -89,6 +92,10 @@ TIME_PATTERNS = frozenset({
 YES_SIGNALS = frozenset({
     "yes", "yeah", "yep", "sounds right", "sounds good",
     "correct", "that's right", "go ahead",
+})
+CONFIRM_CLOSE_SIGNALS = frozenset({
+    "no", "nope", "nah", "thanks", "thank you", "bye", "goodbye",
+    "that's it", "that's all", "all good", "i'm good", "nothing else",
 })
 
 # Terminal state canned responses — bypass LLM entirely
@@ -235,6 +242,8 @@ class StateMachine:
             if detect_high_ticket(session.problem_description):
                 session.lead_type = "high_ticket"
             _transition(session, State.URGENCY)
+            # All fields known — skip LLM, acknowledge briefly
+            return Action(speak="Got it.", needs_llm=False)
         return Action(needs_llm=True)
 
     def _handle_urgency(self, session: CallSession, text: str) -> Action:
@@ -311,6 +320,18 @@ class StateMachine:
         return Action(end_call=True, needs_llm=True)
 
     def _handle_confirm(self, session: CallSession, text: str) -> Action:
+        if session.state_turn_count < 1:
+            # First turn: LLM confirms appointment, asks "Anything else?"
+            return Action(needs_llm=True)
+        # Second turn: caller responded
+        if match_any_keyword(text, CONFIRM_CLOSE_SIGNALS) or not text.strip():
+            # Common close -> canned response, skip LLM
+            return Action(
+                speak="Alright, thanks for calling ACE Cooling — stay cool out there.",
+                end_call=True,
+                needs_llm=False,
+            )
+        # Caller asked a question -> LLM answers, then end
         return Action(end_call=True, needs_llm=True)
 
     def _handle_callback(self, session: CallSession, text: str) -> Action:

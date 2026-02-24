@@ -303,6 +303,30 @@ class TestDiscoveryState:
         assert session.state == State.DISCOVERY
 
 
+class TestDiscoverySkipWhenComplete:
+    """DISCOVERY should skip LLM when all fields are pre-populated."""
+
+    def test_all_fields_known_skips_llm(self, sm, session):
+        """Returning caller: name, problem, address all from lookup -> skip LLM."""
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC blowing cold air"
+        session.service_address = "3711 Fortitude Road"
+        action = sm.process(session, "Having a problem with my AC")
+        assert session.state == State.URGENCY
+        assert action.needs_llm is False
+        assert action.speak == "Got it."
+
+    def test_missing_address_still_uses_llm(self, sm, session):
+        """Name and problem known, but no address -> LLM asks for address."""
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC blowing cold air"
+        action = sm.process(session, "Having a problem")
+        assert session.state == State.DISCOVERY
+        assert action.needs_llm is True
+
+
 # --- URGENCY state ---
 
 class TestUrgencyState:
@@ -370,6 +394,25 @@ class TestUrgencyState:
         session.has_appointment = False
         action = sm.process(session, "Can I reschedule for something later?")
         assert session.state == State.URGENCY  # no appointment, no redirect
+
+
+class TestUrgencyAdditionalKeywords:
+    """Additional urgency keywords for STT resilience."""
+
+    @pytest.mark.parametrize("text", [
+        "I need someone immediately",
+        "Earliest available please",
+        "This is urgent",
+        "soon as possible",
+    ])
+    def test_additional_urgency_words(self, sm, session, text):
+        session.state = State.URGENCY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC issue"
+        session.service_address = "3711 Fortitude Road"
+        sm.process(session, text)
+        assert session.state == State.PRE_CONFIRM
+        assert session.urgency_tier == "urgent"
 
 
 # --- PRE_CONFIRM state ---
@@ -467,9 +510,50 @@ class TestBookingFailedState:
 
 class TestConfirmState:
     def test_ends_call(self, sm, session):
+        """Legacy test: CONFIRM still eventually ends the call."""
         session.state = State.CONFIRM
+        session.booking_confirmed = True
+        # First turn: does NOT end call
         action = sm.process(session, "")
+        # Second turn: ends call
+        session.agent_has_responded = True
+        action = sm.process(session, "no thanks")
         assert action.end_call is True
+
+
+class TestConfirmTwoTurn:
+    """CONFIRM should NOT end_call on first turn — only after caller responds."""
+
+    def test_confirm_first_turn_does_not_end_call(self, sm, session):
+        """First turn in CONFIRM: agent confirms appointment."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        action = sm.process(session, "")
+        assert action.end_call is False
+        assert action.needs_llm is True
+
+    def test_confirm_second_turn_ends_call_with_canned_close(self, sm, session):
+        """Second turn: caller says 'no thanks' -> canned close, no LLM."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        # First turn
+        sm.process(session, "")
+        session.agent_has_responded = True
+        # Second turn: common close signal
+        action = sm.process(session, "No, that's all. Thanks.")
+        assert action.end_call is True
+        assert action.needs_llm is False
+        assert "stay cool" in action.speak.lower() or "thanks for calling" in action.speak.lower()
+
+    def test_confirm_second_turn_question_uses_llm(self, sm, session):
+        """Second turn: caller asks a question -> use LLM."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "How much does the diagnostic cost?")
+        assert action.end_call is True
+        assert action.needs_llm is True
 
 
 # --- CALLBACK state ---
