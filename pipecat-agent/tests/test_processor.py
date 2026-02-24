@@ -461,12 +461,15 @@ class TestPostToolDebounce:
 
 
 class TestExtractionFirewall:
-    """Extraction must NOT overwrite handler-owned fields."""
+    """zip_code is firewalled (never set by extraction).
+    service_address and customer_name CAN be set by extraction when empty,
+    but extraction never overwrites existing values."""
+
+    # --- zip_code: fully firewalled ---
 
     @pytest.mark.asyncio
     async def test_extraction_does_not_overwrite_zip(self, processor):
         """Reproduces Jonas call bug: extraction set wrong ZIP before handler corrected it."""
-        # Restore real _run_extraction (fixture mocks it)
         processor._run_extraction = StateMachineProcessor._run_extraction.__get__(processor)
         processor.session.zip_code = "78701"
         processor.session.conversation_history = [
@@ -492,8 +495,11 @@ class TestExtractionFirewall:
             await processor._run_extraction()
         assert processor.session.zip_code == ""
 
+    # --- service_address: extraction fills empty, never overwrites ---
+
     @pytest.mark.asyncio
-    async def test_extraction_does_not_set_address(self, processor):
+    async def test_extraction_sets_address_when_empty(self, processor):
+        """Extraction should set service_address when empty (fallback for new callers)."""
         processor._run_extraction = StateMachineProcessor._run_extraction.__get__(processor)
         processor.session.service_address = ""
         processor.session.conversation_history = [
@@ -503,10 +509,27 @@ class TestExtractionFirewall:
         with patch("calllock.processor.extract_fields", new_callable=AsyncMock) as mock_extract:
             mock_extract.return_value = {"service_address": "123 Oak Street"}
             await processor._run_extraction()
-        assert processor.session.service_address == ""
+        assert processor.session.service_address == "123 Oak Street"
 
     @pytest.mark.asyncio
-    async def test_extraction_does_not_set_name(self, processor):
+    async def test_extraction_does_not_overwrite_existing_address(self, processor):
+        """Extraction must not overwrite address already set by lookup_caller."""
+        processor._run_extraction = StateMachineProcessor._run_extraction.__get__(processor)
+        processor.session.service_address = "456 Main Ave"
+        processor.session.conversation_history = [
+            {"role": "user", "content": "123 Oak Street"},
+            {"role": "assistant", "content": "Got it."},
+        ]
+        with patch("calllock.processor.extract_fields", new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = {"service_address": "123 Oak Street"}
+            await processor._run_extraction()
+        assert processor.session.service_address == "456 Main Ave"
+
+    # --- customer_name: extraction fills empty, never overwrites ---
+
+    @pytest.mark.asyncio
+    async def test_extraction_sets_name_when_empty(self, processor):
+        """Extraction should set customer_name when empty (fallback for new callers)."""
         processor._run_extraction = StateMachineProcessor._run_extraction.__get__(processor)
         processor.session.customer_name = ""
         processor.session.conversation_history = [
@@ -516,7 +539,23 @@ class TestExtractionFirewall:
         with patch("calllock.processor.extract_fields", new_callable=AsyncMock) as mock_extract:
             mock_extract.return_value = {"customer_name": "Jonas"}
             await processor._run_extraction()
-        assert processor.session.customer_name == ""
+        assert processor.session.customer_name == "Jonas"
+
+    @pytest.mark.asyncio
+    async def test_extraction_does_not_overwrite_existing_name(self, processor):
+        """Extraction must not overwrite name already set by lookup_caller."""
+        processor._run_extraction = StateMachineProcessor._run_extraction.__get__(processor)
+        processor.session.customer_name = "Jonas"
+        processor.session.conversation_history = [
+            {"role": "user", "content": "This is Jon"},
+            {"role": "assistant", "content": "Hi."},
+        ]
+        with patch("calllock.processor.extract_fields", new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = {"customer_name": "Jon"}
+            await processor._run_extraction()
+        assert processor.session.customer_name == "Jonas"
+
+    # --- problem_description: extraction-owned ---
 
     @pytest.mark.asyncio
     async def test_extraction_still_sets_problem_description(self, processor):

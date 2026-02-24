@@ -17,7 +17,7 @@ from calllock.session import CallSession
 from calllock.state_machine import StateMachine, Action, TERMINAL_SCRIPTS, TERMINAL_SCOPED_PROMPT, BOOKING_LANGUAGE
 from calllock.prompts import get_system_prompt
 from calllock.extraction import extract_fields
-from calllock.validation import validate_name, validate_zip, match_any_keyword
+from calllock.validation import validate_name, validate_zip, validate_address, match_any_keyword
 from calllock.tools import V2Client
 
 logger = logging.getLogger(__name__)
@@ -374,10 +374,11 @@ class StateMachineProcessor(FrameProcessor):
     async def _run_extraction(self):
         """Extract structured fields from conversation using LLM.
 
-        EXTRACTION FIREWALL: Only extraction-owned fields are set here.
-        Handler-owned fields (zip_code, service_address, customer_name) are
-        NEVER set by extraction — they have deterministic paths in the state
-        machine handlers and lookup_caller tool result.
+        EXTRACTION FIREWALL: zip_code is NEVER set by extraction — it has a
+        deterministic regex path in _handle_service_area and feeds into
+        is_service_area() routing. service_address and customer_name CAN be
+        set by extraction when empty (fallback for callers not in DB), but
+        extraction never overwrites values already set by lookup_caller.
         """
         if len(self.session.conversation_history) < 2:
             return
@@ -386,7 +387,7 @@ class StateMachineProcessor(FrameProcessor):
         if not extracted:
             return
 
-        # Extraction-owned fields only
+        # Extraction-owned fields
         if not self.session.problem_description:
             prob = extracted.get("problem_description", "")
             if prob:
@@ -406,3 +407,15 @@ class StateMachineProcessor(FrameProcessor):
             dur = extracted.get("problem_duration", "")
             if dur:
                 self.session.problem_duration = dur
+
+        # Fallback fields: extraction fills empty, never overwrites
+        # (zip_code is fully firewalled — deterministic handler only)
+        if not self.session.service_address:
+            addr = validate_address(extracted.get("service_address", ""))
+            if addr:
+                self.session.service_address = addr
+
+        if not self.session.customer_name:
+            name = validate_name(extracted.get("customer_name", ""))
+            if name:
+                self.session.customer_name = name
