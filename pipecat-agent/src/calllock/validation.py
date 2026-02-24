@@ -77,6 +77,9 @@ WORD_TO_DIGIT = {
     "zero": "0", "oh": "0", "o": "0",
     "one": "1", "two": "2", "three": "3", "four": "4",
     "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13",
+    "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+    "eighteen": "18", "nineteen": "19",
 }
 
 
@@ -121,6 +124,41 @@ def validate_name(value: str | None) -> str:
     return cleaned
 
 
+def _normalize_address_number(address: str) -> str:
+    """Convert leading number words in an address to digits.
+
+    Only handles single-digit words (one through nine, zero, oh, o).
+    Handles mixed sequences like '53 Eleven' → '5311'.
+    Stops at the first token that is not a digit or number word.
+    """
+    tokens = address.split()
+    if not tokens:
+        return address
+
+    digit_parts = []
+    first_non_number_idx = 0
+
+    for i, tok in enumerate(tokens):
+        lower = tok.lower()
+        if lower in WORD_TO_DIGIT:
+            digit_parts.append(WORD_TO_DIGIT[lower])
+            first_non_number_idx = i + 1
+        elif tok.isdigit():
+            digit_parts.append(tok)
+            first_non_number_idx = i + 1
+        else:
+            break
+
+    if not digit_parts or first_non_number_idx == 0:
+        return address
+
+    number_str = "".join(digit_parts)
+    rest = " ".join(tokens[first_non_number_idx:])
+    if rest:
+        return f"{number_str} {rest}"
+    return number_str
+
+
 def validate_address(value: str | None) -> str:
     if not value:
         return ""
@@ -129,6 +167,10 @@ def validate_address(value: str | None) -> str:
         return ""
     if re.search(r"\bor\b", cleaned, re.IGNORECASE):
         return ""
+
+    # Normalize number words in street number before validation
+    cleaned = _normalize_address_number(cleaned)
+
     # Must contain at least one letter (rejects "7801", "78001")
     if not re.search(r"[a-zA-Z]", cleaned):
         return ""

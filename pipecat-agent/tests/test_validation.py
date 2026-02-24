@@ -196,6 +196,26 @@ class TestValidateAddress:
     def test_rejects_or_ambiguity(self):
         assert validate_address("123 Main or 456 Oak") == ""
 
+    def test_normalizes_mixed_digit_word_street_number(self):
+        """'53 Eleven Izzical Road' → '5311 Izzical Road'"""
+        assert validate_address("53 Eleven Izzical Road") == "5311 Izzical Road"
+
+    def test_normalizes_digit_then_word(self):
+        """'4 Two Six Elm St' → '426 Elm St'"""
+        assert validate_address("4 Two Six Elm St") == "426 Elm St"
+
+    def test_leaves_already_numeric_alone(self):
+        """'5311 Main St' → '5311 Main St' (no change)"""
+        assert validate_address("5311 Main St") == "5311 Main St"
+
+    def test_stops_at_non_number_word(self):
+        """'Five Oak Lane' → '5 Oak Lane' (stops at 'Oak')"""
+        assert validate_address("Five Oak Lane") == "5 Oak Lane"
+
+    def test_oh_as_zero_in_address(self):
+        """'5 Oh Three Main St' → '503 Main St'"""
+        assert validate_address("5 Oh Three Main St") == "503 Main St"
+
 
 class TestDetectHighTicket:
     def test_replacement(self):
