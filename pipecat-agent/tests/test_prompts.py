@@ -174,20 +174,24 @@ class TestBuildContextBookingDetails:
         assert "Monday, February 24" not in context
 
 
-class TestCallbackPromiseInSafety:
-    """Callback promise should appear in SAFETY prompt for service-intent callers."""
+class TestCallbackPromiseRendering:
+    """Callback promise should render cleanly in KNOWN INFO."""
 
-    def test_safety_prompt_includes_callback_promise(self):
+    def test_callback_promise_renders_issue(self):
         session = CallSession(phone_number="+15125551234")
         session.state = State.SAFETY
-        session.callback_promise = "{'date': 'today', 'issue': 'being really loud'}"
+        session.callback_promise = {"date": "today", "issue": "being really loud"}
         prompt = get_system_prompt(session)
-        assert "callback" in prompt.lower()
         assert "being really loud" in prompt
+        assert "callback" in prompt.lower()
 
-    def test_safety_prompt_without_promise_unchanged(self):
+    def test_callback_promise_empty_dict_excluded(self):
         session = CallSession(phone_number="+15125551234")
         session.state = State.SAFETY
-        session.callback_promise = ""
+        session.callback_promise = {}
         prompt = get_system_prompt(session)
-        assert "we owe this caller a callback:" not in prompt.lower()
+        assert "we owe this caller" not in prompt.lower()
+
+    def test_safety_prompt_no_longer_has_callback_instruction(self):
+        """SAFETY prompt should NOT contain callback acknowledgment instruction (moved to canned speak)."""
+        assert "CALLBACK ACKNOWLEDGMENT" not in STATE_PROMPTS[State.SAFETY]

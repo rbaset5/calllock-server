@@ -112,6 +112,8 @@ NEVER offer to help with their service issue."""
 
 BOOKING_LANGUAGE = frozenset({"appointment", "schedule", "book", "tech out", "available", "slot", "open"})
 
+URGENCY_QUESTION = "How urgent is this - need someone today, or this week works?"
+
 
 def _transition(session: CallSession, new_state: State):
     """Helper to transition state and reset turn counter."""
@@ -242,8 +244,13 @@ class StateMachine:
             if detect_high_ticket(session.problem_description):
                 session.lead_type = "high_ticket"
             _transition(session, State.URGENCY)
-            # All fields known — skip LLM, acknowledge briefly
-            return Action(speak="Got it.", needs_llm=False)
+            # Build canned speak: callback ack (if owed) + urgency question
+            parts = ["Got it."]
+            if session.callback_promise:
+                issue = session.callback_promise.get("issue", "a previous issue") if isinstance(session.callback_promise, dict) else "a previous issue"
+                parts.append(f"I also see we owe you a callback about {issue} - we'll make sure that gets handled too.")
+            parts.append(URGENCY_QUESTION)
+            return Action(speak=" ".join(parts), needs_llm=False)
         return Action(needs_llm=True)
 
     def _handle_urgency(self, session: CallSession, text: str) -> Action:
@@ -351,7 +358,7 @@ class StateMachine:
         raw_address = result.get("address", "")
         session.service_address = validate_address(raw_address)
         session.has_appointment = bool(result.get("upcomingAppointment"))
-        session.callback_promise = result.get("callbackPromise", "")
+        session.callback_promise = result.get("callbackPromise", {}) or {}
 
         # Extract appointment details if present
         appt = result.get("upcomingAppointment")

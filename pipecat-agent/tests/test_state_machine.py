@@ -284,6 +284,30 @@ class TestDiscoveryState:
         assert session.customer_name == ""
         assert session.state == State.DISCOVERY
 
+    def test_all_fields_collected_emits_urgency_question(self, sm, session):
+        """When all fields known, canned speak should include urgency question."""
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC blowing warm air"
+        session.service_address = "4210 South Lamar Blvd"
+        action = sm.process(session, "")
+        assert session.state == State.URGENCY
+        assert action.needs_llm is False
+        assert "today" in action.speak.lower()
+
+    def test_all_fields_with_callback_promise_includes_ack(self, sm, session):
+        """When callback promise exists, canned speak should acknowledge it."""
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC blowing warm air"
+        session.service_address = "4210 South Lamar Blvd"
+        session.callback_promise = {"date": "today", "issue": "being really loud"}
+        action = sm.process(session, "")
+        assert session.state == State.URGENCY
+        assert "callback" in action.speak.lower()
+        assert "being really loud" in action.speak.lower()
+        assert "today" in action.speak.lower()  # urgency question still present
+
     def test_high_ticket_detected_in_discovery(self, sm, session):
         session.state = State.DISCOVERY
         session.customer_name = "Jonas"
@@ -315,7 +339,8 @@ class TestDiscoverySkipWhenComplete:
         action = sm.process(session, "Having a problem with my AC")
         assert session.state == State.URGENCY
         assert action.needs_llm is False
-        assert action.speak == "Got it."
+        assert action.speak.startswith("Got it.")
+        assert "today" in action.speak.lower()  # urgency question included
 
     def test_missing_address_still_uses_llm(self, sm, session):
         """Name and problem known, but no address -> LLM asks for address."""

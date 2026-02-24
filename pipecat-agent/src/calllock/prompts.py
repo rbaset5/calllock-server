@@ -96,7 +96,9 @@ def _build_context(session: CallSession) -> str:
     if session.caller_known:
         parts.append("Returning caller (known customer)")
     if session.callback_promise:
-        parts.append(f"We owe this caller a callback: {session.callback_promise}")
+        issue = session.callback_promise.get("issue", "unknown issue")
+        date = session.callback_promise.get("date", "")
+        parts.append(f"We owe this caller a callback about {issue}" + (f" (from {date})" if date else ""))
     if session.lead_type == "high_ticket":
         parts.append("HIGH-TICKET LEAD: Caller wants replacement/new system")
     if session.is_third_party:
@@ -188,9 +190,7 @@ AMBIGUOUS: ONE follow-up: "Just to be safe — right this second, are you smelli
 "Gas heater" + "smells like gas" = YES emergency.
 Only their answer about RIGHT NOW determines safety.
 
-CALLBACK ACKNOWLEDGMENT:
-If KNOWN INFO mentions we owe this caller a callback, briefly acknowledge it AFTER the safety check:
-"I also see we owe you a callback about [issue] - we'll make sure that gets handled too.""",
+Do NOT mention callbacks or callback promises — that is handled automatically in the next step.""",
 
     State.SAFETY_EXIT: """## SAFETY EMERGENCY
 Say EXACTLY: "Okay — this is a safety emergency. I need you to leave the house right now and call 911 from outside. Don't flip any light switches on the way out. Stay safe."
@@ -227,14 +227,16 @@ When all three items are collected, STOP. Say nothing about next steps. The syst
     State.URGENCY: """## URGENCY
 Determine scheduling priority.
 
+If KNOWN INFO mentions we owe this caller a callback, acknowledge it briefly first.
+
 If timing is ALREADY CLEAR from what they said:
 "ASAP" / "today" / "right away" -> urgent
 "whenever" / "this week" / "no rush" / specific day -> routine
 
 If timing is UNCLEAR:
-"How urgent is this — more of a 'need someone today' situation, or 'sometime in the next few days' works?"
+"How urgent is this - more of a 'need someone today' situation, or 'sometime in the next few days' works?"
 
-Do NOT say the time "works" or is "available" — you haven't checked the calendar yet.""",
+Do NOT say the time "works" or is "available" - you haven't checked the calendar yet.""",
 
     State.URGENCY_CALLBACK: """## URGENCY CALLBACK
 Handle callback requests and high-ticket sales lead routing.

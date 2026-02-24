@@ -16,7 +16,7 @@ class CallSession:
     appointment_date: str = ""
     appointment_time: str = ""
     appointment_uid: str = ""
-    callback_promise: str = ""
+    callback_promise: dict = field(default_factory=dict)
     caller_intent: str = ""  # hvac_issue, schedule_service, follow_up, manage_appointment, unclear
 
     # From discovery
@@ -49,6 +49,7 @@ class CallSession:
 
     # Terminal state response control
     terminal_reply_used: bool = False
+    confirm_extended: bool = False  # True after first delayed-end cancellation in CONFIRM
 
     # Call metadata
     call_sid: str = ""
