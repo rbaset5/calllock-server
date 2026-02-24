@@ -1,4 +1,6 @@
 import re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 
 def match_any_keyword(text: str, keywords: set[str]) -> bool:
@@ -118,6 +120,62 @@ def is_service_area(zip_code: str) -> bool:
     if not validated:
         return False
     return validated.startswith("787")
+
+
+_CST = ZoneInfo("America/Chicago")
+_BUSINESS_START = 9   # 9 AM
+_BUSINESS_END = 18    # 6 PM
+
+_ASAP_KEYWORDS = {
+    "asap", "today", "right away", "soonest", "right now",
+    "as soon as possible", "same day", "morning",
+}
+
+
+def _now_cst() -> datetime:
+    """Get current time in CST. Extracted for test mocking."""
+    return datetime.now(_CST)
+
+
+def resolve_booking_time(preferred_time: str) -> str:
+    """Map human preferred_time text to an ISO datetime string.
+
+    Returns an ISO 8601 datetime in America/Chicago timezone suitable
+    for Cal.com's booking API. This is a hint — Cal.com picks the actual
+    available slot from its calendar.
+    """
+    now = _now_cst()
+    text = preferred_time.strip().lower()
+
+    # ASAP / today / right away / soonest / same day / morning → now + 2h truncated
+    if text in _ASAP_KEYWORDS:
+        target = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+        # If past business hours, go to next morning
+        if target.hour >= _BUSINESS_END or target.hour < _BUSINESS_START:
+            target = (now + timedelta(days=1)).replace(
+                hour=_BUSINESS_START, minute=0, second=0, microsecond=0
+            )
+        return target.isoformat()
+
+    # Tomorrow → 9 AM next day
+    if "tomorrow" in text:
+        target = (now + timedelta(days=1)).replace(
+            hour=_BUSINESS_START, minute=0, second=0, microsecond=0
+        )
+        return target.isoformat()
+
+    # This afternoon → 2 PM today (or tomorrow if past 2 PM)
+    if "afternoon" in text:
+        target = now.replace(hour=14, minute=0, second=0, microsecond=0)
+        if now.hour >= 14:
+            target += timedelta(days=1)
+        return target.isoformat()
+
+    # Default: this week / whenever / empty / unknown → 9 AM next day
+    target = (now + timedelta(days=1)).replace(
+        hour=_BUSINESS_START, minute=0, second=0, microsecond=0
+    )
+    return target.isoformat()
 
 
 def classify_intent(text: str) -> str:

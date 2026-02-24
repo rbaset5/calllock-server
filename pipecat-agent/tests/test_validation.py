@@ -7,7 +7,11 @@ from calllock.validation import (
     detect_safety_emergency,
     detect_high_ticket,
     match_any_keyword,
+    resolve_booking_time,
 )
+from unittest.mock import patch
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 
 class TestValidateZip:
@@ -202,3 +206,92 @@ class TestDetectHighTicket:
 
     def test_repair(self):
         assert detect_high_ticket("my thermostat is broken") is False
+
+
+class TestResolveBookingTime:
+    """resolve_booking_time maps human text to ISO datetime strings."""
+
+    CST = ZoneInfo("America/Chicago")
+
+    def _freeze(self, year=2026, month=2, day=23, hour=10, minute=0):
+        return datetime(year, month, day, hour, minute, tzinfo=self.CST)
+
+    def test_asap_returns_2h_ahead_truncated(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=10, minute=15)):
+            result = resolve_booking_time("ASAP")
+        assert "2026-02-23T12:00:00" in result
+
+    def test_today_returns_2h_ahead_truncated(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=9, minute=30)):
+            result = resolve_booking_time("today")
+        assert "2026-02-23T11:00:00" in result
+
+    def test_soonest_same_as_asap(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=10, minute=15)):
+            result = resolve_booking_time("soonest")
+        assert "2026-02-23T12:00:00" in result
+
+    def test_right_away_same_as_asap(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=10, minute=15)):
+            result = resolve_booking_time("right away")
+        assert "2026-02-23T12:00:00" in result
+
+    def test_same_day_treated_as_asap(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=10, minute=15)):
+            result = resolve_booking_time("same day")
+        assert "2026-02-23T12:00:00" in result
+
+    def test_morning_treated_as_asap(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=8, minute=0)):
+            result = resolve_booking_time("morning")
+        assert "2026-02-23T10:00:00" in result
+
+    def test_late_evening_asap_goes_next_morning(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=19)):
+            result = resolve_booking_time("ASAP")
+        assert "2026-02-24T09:00:00" in result
+
+    def test_tomorrow_returns_9am(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=15)):
+            result = resolve_booking_time("tomorrow")
+        assert "2026-02-24T09:00:00" in result
+
+    def test_tomorrow_morning_returns_9am(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=15)):
+            result = resolve_booking_time("tomorrow morning")
+        assert "2026-02-24T09:00:00" in result
+
+    def test_this_afternoon_before_2pm(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=10)):
+            result = resolve_booking_time("this afternoon")
+        assert "2026-02-23T14:00:00" in result
+
+    def test_this_afternoon_after_2pm_goes_tomorrow(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=15)):
+            result = resolve_booking_time("this afternoon")
+        assert "2026-02-24T14:00:00" in result
+
+    def test_this_week_returns_next_day_9am(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=10)):
+            result = resolve_booking_time("this week")
+        assert "2026-02-24T09:00:00" in result
+
+    def test_whenever_returns_next_day_9am(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=10)):
+            result = resolve_booking_time("whenever")
+        assert "2026-02-24T09:00:00" in result
+
+    def test_empty_returns_next_day_9am(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=10)):
+            result = resolve_booking_time("")
+        assert "2026-02-24T09:00:00" in result
+
+    def test_unknown_text_falls_through_to_default(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=10)):
+            result = resolve_booking_time("next week")
+        assert "2026-02-24T09:00:00" in result
+
+    def test_result_is_valid_iso_format(self):
+        with patch("calllock.validation._now_cst", return_value=self._freeze(hour=10)):
+            result = resolve_booking_time("ASAP")
+        datetime.fromisoformat(result)
