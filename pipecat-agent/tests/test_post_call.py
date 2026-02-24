@@ -200,18 +200,30 @@ class TestHandleCallEnded:
 
 
 class TestCallLeadLinking:
-    def test_call_payload_includes_lead_id(self):
+    def test_call_payload_includes_lead_id_when_present(self):
         s = CallSession(phone_number="+15125551234")
         s.customer_name = "Jonas"
         s.start_time = 1000.0
         payload = build_call_payload(s, end_time=1070.0, user_email="test@test.com", lead_id="abc-123")
         assert payload["lead_id"] == "abc-123"
 
-    def test_call_payload_without_lead_id(self):
+    def test_call_payload_omits_lead_id_when_none(self):
         s = CallSession(phone_number="+15125551234")
         s.start_time = 1000.0
         payload = build_call_payload(s, end_time=1070.0, user_email="test@test.com")
-        assert payload.get("lead_id") is None
+        assert "lead_id" not in payload
+
+    def test_call_payload_includes_job_id_when_present(self):
+        s = CallSession(phone_number="+15125551234")
+        s.start_time = 1000.0
+        payload = build_call_payload(s, end_time=1070.0, user_email="test@test.com", job_id="job-456")
+        assert payload["job_id"] == "job-456"
+
+    def test_call_payload_omits_job_id_when_none(self):
+        s = CallSession(phone_number="+15125551234")
+        s.start_time = 1000.0
+        payload = build_call_payload(s, end_time=1070.0, user_email="test@test.com")
+        assert "job_id" not in payload
 
 
 class TestUrgencyMapping:

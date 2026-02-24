@@ -103,14 +103,14 @@ def build_job_payload(session: CallSession, end_time: float, user_email: str) ->
     return payload
 
 
-def build_call_payload(session: CallSession, end_time: float, user_email: str, lead_id: str | None = None) -> dict:
+def build_call_payload(session: CallSession, end_time: float, user_email: str, lead_id: str | None = None, job_id: str | None = None) -> dict:
     """Build the call record payload."""
     now_dt = datetime.now(timezone.utc).isoformat()
     start_dt = datetime.fromtimestamp(session.start_time, tz=timezone.utc).isoformat() if session.start_time > 0 else now_dt
     end_dt = datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat() if end_time > 0 else now_dt
     duration = int(end_time - session.start_time) if session.start_time > 0 else 0
 
-    return {
+    payload = {
         "call_id": session.call_sid,
         "phone_number": session.phone_number or "unknown",
         "customer_name": session.customer_name,
@@ -120,15 +120,19 @@ def build_call_payload(session: CallSession, end_time: float, user_email: str, l
         "duration_seconds": duration,
         "direction": "inbound",
         "outcome": _derive_end_call_reason(session),
-        "urgency_tier": session.urgency_tier,
+        "urgency_tier": _map_urgency(session.urgency_tier),
         "problem_description": session.problem_description,
         "booking_status": _derive_booking_status(session),
-        "lead_id": lead_id,
         "transcript_object": [
             e for e in to_json_array(session.transcript_log)
             if e.get("role") in ("agent", "user")
         ],
     }
+    if lead_id:
+        payload["lead_id"] = lead_id
+    if job_id:
+        payload["job_id"] = job_id
+    return payload
 
 
 def chunk_transcript_dump(dump: dict, max_bytes: int = 3500) -> list[str]:
@@ -204,11 +208,12 @@ async def handle_call_ended(session: CallSession):
     job_result = await dashboard.send_job(job_payload)
     logger.info(f"Dashboard job sync: {job_result}")
 
-    # Extract lead_id for call-lead linking
+    # Extract lead_id and job_id for call linking
     lead_id = job_result.get("lead_id") if isinstance(job_result, dict) else None
+    job_id = job_result.get("job_id") if isinstance(job_result, dict) else None
 
-    # 2. Send call record (linked to lead)
-    call_payload = build_call_payload(session, end_time, user_email, lead_id=lead_id)
+    # 2. Send call record (linked to lead and job)
+    call_payload = build_call_payload(session, end_time, user_email, lead_id=lead_id, job_id=job_id)
     call_result = await dashboard.send_call(call_payload)
     logger.info(f"Dashboard call sync: {call_result}")
 
