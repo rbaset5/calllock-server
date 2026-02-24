@@ -105,6 +105,26 @@ class TestAppointmentContextGating:
         assert "2026-02-20" in prompt
 
 
+class TestConfirmPromptInjection:
+    def test_confirm_prompt_includes_booking_details(self):
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        session.confirmation_message = "Appointment confirmed for Wednesday, February 25 at 3:00 PM"
+        prompt = get_system_prompt(session)
+        assert "Wednesday, February 25 at 3:00 PM" in prompt
+        assert "BOOKING CONFIRMED:" in prompt
+
+    def test_confirm_prompt_without_message_uses_static(self):
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        session.confirmation_message = ""
+        prompt = get_system_prompt(session)
+        assert "CONFIRM" in prompt
+        assert "Wrap up" in prompt
+
+
 class TestBuildContextBookingDetails:
     """_build_context renders confirmation_message only in CONFIRM state."""
 
