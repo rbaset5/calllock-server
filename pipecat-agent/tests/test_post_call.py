@@ -4,6 +4,7 @@ import pytest
 import httpx
 import respx
 import time
+from unittest.mock import AsyncMock
 from calllock.post_call import handle_call_ended, build_job_payload, build_call_payload, chunk_transcript_dump
 from calllock.session import CallSession
 from calllock.states import State
@@ -445,3 +446,45 @@ class TestTranscriptDumpEmission:
         payload = json.loads(dump_lines[0].split("|", 2)[2])
         assert payload["call_sid"] == "CA_test_123"
         assert len(payload["entries"]) > 0
+
+
+class TestClassificationIntegration:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_classification_fields_merged_into_job_payload(self, completed_session, monkeypatch):
+        monkeypatch.setenv("DASHBOARD_JOBS_URL", "https://app.example.com/api/webhook/jobs")
+        monkeypatch.setenv("DASHBOARD_CALLS_URL", "https://app.example.com/api/webhook/calls")
+        monkeypatch.setenv("DASHBOARD_ALERTS_URL", "https://app.example.com/api/webhook/emergency-alerts")
+        monkeypatch.setenv("DASHBOARD_WEBHOOK_SECRET", "test-secret")
+        monkeypatch.setenv("DASHBOARD_USER_EMAIL", "owner@test.com")
+
+        mock_classification = {
+            "ai_summary": "Jonas called about AC not cooling.",
+            "card_headline": "AC Not Blowing Cold",
+            "card_summary": "Service call for AC repair.",
+            "call_type": "SERVICE",
+            "call_subtype": "REPAIR_AC",
+            "sentiment_score": 4,
+        }
+        monkeypatch.setattr(
+            "calllock.post_call.classify_call",
+            AsyncMock(return_value=mock_classification),
+        )
+
+        captured_payload = {}
+
+        def capture_job(request):
+            captured_payload.update(json.loads(request.content))
+            return httpx.Response(200, json={"success": True, "job_id": "job-123", "lead_id": "lead-456"})
+
+        respx.post("https://app.example.com/api/webhook/jobs").mock(side_effect=capture_job)
+        respx.post("https://app.example.com/api/webhook/calls").mock(
+            return_value=httpx.Response(200, json={"success": True})
+        )
+
+        await handle_call_ended(completed_session)
+
+        assert captured_payload.get("ai_summary") == "Jonas called about AC not cooling."
+        assert captured_payload.get("card_headline") == "AC Not Blowing Cold"
+        assert captured_payload.get("call_type") == "SERVICE"
+        assert captured_payload.get("sentiment_score") == 4
