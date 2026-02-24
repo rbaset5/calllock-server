@@ -105,6 +105,9 @@ class FallbackTTSService(TTSService):
         return self._primary.can_generate_metrics()
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
+        # Sanitize em/en dashes to prevent Inworld TTS UTF-8 chunk boundary errors
+        text = text.replace("\u2014", "-").replace("\u2013", "-")
+
         if self._circuit.should_try():
             async for frame in self._try_primary(text, context_id):
                 yield frame
