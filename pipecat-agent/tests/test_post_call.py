@@ -97,6 +97,18 @@ class TestBuildJobPayload:
         assert isinstance(payload["priority_color"], str)
         assert isinstance(payload["revenue_tier"], str)
 
+    def test_booking_confirmed_sets_is_ai_booked(self, completed_session):
+        payload = build_job_payload(completed_session, end_time=1015.0, user_email="owner@test.com")
+        assert payload["is_ai_booked"] is True
+
+    def test_callback_session_no_is_ai_booked(self):
+        s = CallSession(phone_number="+15125551234")
+        s.call_sid = "CA_test_789"
+        s.start_time = 1000.0
+        s.state = State.CALLBACK
+        payload = build_job_payload(s, end_time=1015.0, user_email="owner@test.com")
+        assert payload.get("is_ai_booked") is None
+
 
 class TestBuildCallPayload:
     def test_has_required_fields(self, completed_session):

@@ -99,6 +99,8 @@ def build_job_payload(session: CallSession, end_time: float, user_email: str) ->
     # Conditional fields
     if session.booking_confirmed and session.booked_time:
         payload["scheduled_at"] = session.booked_time
+    if session.booking_confirmed:
+        payload["is_ai_booked"] = True
 
     return payload
 
