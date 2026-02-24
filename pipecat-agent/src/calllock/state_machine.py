@@ -351,8 +351,9 @@ class StateMachine:
         booked = result.get("booked") or result.get("booking_confirmed")
         if booked:
             session.booking_confirmed = True
-            session.booked_time = result.get("booking_time", result.get("appointment_time", ""))
+            session.booked_time = result.get("appointment_time") or result.get("booking_time", "")
             session.appointment_id = result.get("appointmentId", "")
+            session.confirmation_message = result.get("confirmationMessage", "")
             _transition(session, State.CONFIRM)
         else:
             session.booking_confirmed = False

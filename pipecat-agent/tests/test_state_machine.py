@@ -421,6 +421,20 @@ class TestBookingState:
         assert session.booking_confirmed is True
         assert session.state == State.CONFIRM
 
+    def test_book_service_stores_appointment_time(self, sm, session):
+        session.state = State.BOOKING
+        session.booking_attempted = True
+        sm.handle_tool_result(session, "book_service", {
+            "booking_confirmed": True,
+            "appointmentId": "apt_123",
+            "confirmationMessage": "Appointment confirmed for Wednesday, February 25 at 3:00 PM",
+            "appointment_time": "2026-02-25T15:00:00-06:00",
+        })
+        assert session.booking_confirmed is True
+        assert session.booked_time == "2026-02-25T15:00:00-06:00"
+        assert session.confirmation_message == "Appointment confirmed for Wednesday, February 25 at 3:00 PM"
+        assert session.state == State.CONFIRM
+
     def test_booking_failure_routes_to_booking_failed(self, sm, session):
         session.state = State.BOOKING
         sm.handle_tool_result(session, "book_service", {"booked": False})
