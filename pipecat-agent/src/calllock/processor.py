@@ -60,6 +60,7 @@ class StateMachineProcessor(FrameProcessor):
         self._buffer_timer: asyncio.Task | None = None
         self._buffer_frame: TranscriptionFrame | None = None
         self._buffer_start_time: float = 0.0
+        self._end_call_task: asyncio.Task | None = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -156,7 +157,7 @@ class StateMachineProcessor(FrameProcessor):
         if action.end_call:
             if action.needs_llm:
                 await self.push_frame(combined_frame, FrameDirection.DOWNSTREAM)
-                asyncio.create_task(self._delayed_end_call(delay=3.0))
+                self._end_call_task = asyncio.create_task(self._delayed_end_call(delay=3.0))
             else:
                 await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
             return
@@ -182,6 +183,14 @@ class StateMachineProcessor(FrameProcessor):
             "timestamp": _time.time(),
             "state": self.session.state.value,
         })
+
+        # Cancel pending delayed end if user speaks again (one chance only)
+        if self._end_call_task and not self._end_call_task.done():
+            if not self.session.confirm_extended:
+                self._end_call_task.cancel()
+                self._end_call_task = None
+                self.session.confirm_extended = True
+                logger.info(f"[{self.session.state.value}] Cancelled delayed end - user spoke again")
 
         # Buffer mode: skip state machine, just accumulate text
         if self._buffer_mode:
@@ -225,7 +234,7 @@ class StateMachineProcessor(FrameProcessor):
         if action.end_call:
             if action.needs_llm or force_llm:
                 await self.push_frame(frame, FrameDirection.DOWNSTREAM)
-                asyncio.create_task(self._delayed_end_call(delay=3.0))
+                self._end_call_task = asyncio.create_task(self._delayed_end_call(delay=3.0))
             else:
                 await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
             return
@@ -250,6 +259,7 @@ class StateMachineProcessor(FrameProcessor):
     async def _delayed_end_call(self, delay: float = 3.0):
         """Push EndFrame after a delay to allow TTS to finish speaking."""
         await asyncio.sleep(delay)
+        self._end_call_task = None
         await self.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
 
     async def _handle_terminal_response(self, frame, action):
@@ -289,7 +299,7 @@ class StateMachineProcessor(FrameProcessor):
             await self.push_frame(frame, FrameDirection.DOWNSTREAM)
 
         if action.end_call:
-            asyncio.create_task(self._delayed_end_call(delay=4.0))
+            self._end_call_task = asyncio.create_task(self._delayed_end_call(delay=4.0))
 
     async def _generate_scoped_reply(self, messages: list[dict]) -> str:
         """Generate a single LLM response using a scoped prompt."""

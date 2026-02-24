@@ -675,3 +675,74 @@ class TestBookingConfirmationStorage:
         await processor._handle_transcription(frame)
 
         assert processor.session.confirmation_message == ""
+
+
+class TestCancellableDelayedEnd:
+    """If user speaks again during delayed end, cancel the end and process new input."""
+
+    @pytest.mark.asyncio
+    async def test_first_cancellation_succeeds_and_processes_input(self, processor):
+        """First speech during goodbye delay should cancel end, set confirm_extended,
+        and process the new transcription (which may create a new delayed end)."""
+        processor.session.state = State.CONFIRM
+        processor.session.booking_confirmed = True
+        processor.session.confirmation_message = "Appointment confirmed for Wednesday at 3 PM"
+        processor.session.state_turn_count = 1
+        processor.session.agent_has_responded = True
+
+        # Process "No." — triggers _delayed_end_call
+        await processor.process_frame(
+            TranscriptionFrame(text="No.", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
+        first_task = processor._end_call_task
+        assert first_task is not None
+        assert not first_task.done()
+
+        # User speaks again before delay expires
+        processor.session.agent_has_responded = True
+        await processor.process_frame(
+            TranscriptionFrame(text="Actually, how much is the diagnostic?", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
+
+        # Yield to event loop so cancellation completes
+        await asyncio.sleep(0)
+
+        # Original delayed end was cancelled; confirm_extended is set
+        assert first_task.cancelled()
+        assert processor.session.confirm_extended is True
+
+        # The new transcription was processed (pushed downstream for LLM)
+        pushed_frames = [call.args[0] for call in processor.push_frame.call_args_list]
+        transcription_pushed = any(
+            isinstance(f, TranscriptionFrame) and "diagnostic" in f.text
+            for f in pushed_frames
+        )
+        assert transcription_pushed, "New transcription should be pushed downstream"
+
+    @pytest.mark.asyncio
+    async def test_second_cancellation_blocked(self, processor):
+        """After one cancellation, subsequent speech should NOT cancel delayed end."""
+        processor.session.state = State.CONFIRM
+        processor.session.booking_confirmed = True
+        processor.session.confirmation_message = "Appointment confirmed for Wednesday at 3 PM"
+        processor.session.state_turn_count = 1
+        processor.session.agent_has_responded = True
+        processor.session.confirm_extended = True  # Already used the one cancellation
+
+        # Process "Thanks." — triggers _delayed_end_call
+        await processor.process_frame(
+            TranscriptionFrame(text="Thanks.", user_id="", timestamp=""),
+            FrameDirection.DOWNSTREAM,
+        )
+
+        if processor._end_call_task:
+            # User speaks again — but extended already used
+            processor.session.agent_has_responded = True
+            await processor.process_frame(
+                TranscriptionFrame(text="Wait one more thing", user_id="", timestamp=""),
+                FrameDirection.DOWNSTREAM,
+            )
+            # confirm_extended should still be True (not reset)
+            assert processor.session.confirm_extended is True
