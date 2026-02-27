@@ -105,6 +105,33 @@ class TestAppointmentContextGating:
         assert "2026-02-20" in prompt
 
 
+class TestDiscoveryPromptBoundary:
+    def test_discovery_prompt_forbids_timing_and_states_auto_transition(self):
+        """DISCOVERY prompt must forbid timing and mention automatic transition."""
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.DISCOVERY
+        prompt = get_system_prompt(session)
+        assert "Do NOT ask about timing" in prompt
+        assert "transitions automatically" in prompt
+
+
+class TestConfirmTwoTurnPrompt:
+    def test_confirm_prompt_has_two_turn_structure(self):
+        """CONFIRM prompt must have FIRST RESPONSE and SECOND RESPONSE sections."""
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.CONFIRM
+        session.confirmation_message = "Wednesday at 9:00 AM"
+        prompt = get_system_prompt(session)
+        assert "FIRST RESPONSE" in prompt
+        assert "SECOND RESPONSE" in prompt
+        assert "EXACT date and time" in prompt
+
+    def test_confirm_prompt_is_single_source(self):
+        """STATE_PROMPTS[CONFIRM] should not exist — _confirm_prompt is the source."""
+        from calllock.prompts import STATE_PROMPTS
+        assert State.CONFIRM not in STATE_PROMPTS
+
+
 class TestConfirmPromptInjection:
     def test_confirm_prompt_includes_booking_details(self):
         session = CallSession(phone_number="+15125551234")
@@ -145,3 +172,26 @@ class TestBuildContextBookingDetails:
 
         context = _build_context(session)
         assert "Monday, February 24" not in context
+
+
+class TestCallbackPromiseRendering:
+    """Callback promise should render cleanly in KNOWN INFO."""
+
+    def test_callback_promise_renders_issue(self):
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.SAFETY
+        session.callback_promise = {"date": "today", "issue": "being really loud"}
+        prompt = get_system_prompt(session)
+        assert "being really loud" in prompt
+        assert "callback" in prompt.lower()
+
+    def test_callback_promise_empty_dict_excluded(self):
+        session = CallSession(phone_number="+15125551234")
+        session.state = State.SAFETY
+        session.callback_promise = {}
+        prompt = get_system_prompt(session)
+        assert "we owe this caller" not in prompt.lower()
+
+    def test_safety_prompt_no_longer_has_callback_instruction(self):
+        """SAFETY prompt should NOT contain callback acknowledgment instruction (moved to canned speak)."""
+        assert "CALLBACK ACKNOWLEDGMENT" not in STATE_PROMPTS[State.SAFETY]

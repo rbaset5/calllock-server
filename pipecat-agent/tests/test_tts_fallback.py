@@ -37,6 +37,7 @@ class MockTTSService(TTSService):
         self.stopped = False
         self.cancelled = False
         self.run_tts_called = False
+        self.last_text = None  # Capture text for sanitization tests
 
     async def start(self, frame):
         self.started = True
@@ -52,6 +53,7 @@ class MockTTSService(TTSService):
 
     async def run_tts(self, text, context_id):
         self.run_tts_called = True
+        self.last_text = text
         if self._raise_exc:
             raise self._raise_exc
         for f in self._frames:
@@ -439,3 +441,42 @@ class TestLifecycle:
         await svc.cancel(CancelFrame())
         assert primary.cancelled
         assert fallback.cancelled
+
+
+class TestEmDashSanitization:
+    """Em/en dashes must be replaced before reaching TTS to prevent UTF-8 chunk boundary errors."""
+
+    async def test_em_dash_sanitized_before_primary(self):
+        """Em dashes in LLM text should be replaced with plain dashes."""
+        primary = MockTTSService(frames=GOOD_FRAMES)
+        fallback = MockTTSService(frames=FALLBACK_FRAMES)
+        svc = FallbackTTSService(primary=primary, fallback=fallback)
+        await svc.start(make_start_frame())
+
+        await collect_frames(svc.run_tts("Quick safety check \u2014 any gas smell?", "ctx-1"))
+
+        assert "\u2014" not in primary.last_text
+        assert "Quick safety check - any gas smell?" == primary.last_text
+
+    async def test_en_dash_sanitized(self):
+        """En dashes should also be replaced."""
+        primary = MockTTSService(frames=GOOD_FRAMES)
+        fallback = MockTTSService(frames=FALLBACK_FRAMES)
+        svc = FallbackTTSService(primary=primary, fallback=fallback)
+        await svc.start(make_start_frame())
+
+        await collect_frames(svc.run_tts("Monday \u2013 Friday", "ctx-1"))
+
+        assert "Monday - Friday" == primary.last_text
+
+    async def test_plain_text_unchanged(self):
+        """Text without special dashes should pass through unchanged."""
+        primary = MockTTSService(frames=GOOD_FRAMES)
+        fallback = MockTTSService(frames=FALLBACK_FRAMES)
+        svc = FallbackTTSService(primary=primary, fallback=fallback)
+        await svc.start(make_start_frame())
+
+        text = "Got it. How urgent is this - need someone today?"
+        await collect_frames(svc.run_tts(text, "ctx-1"))
+
+        assert primary.last_text == text

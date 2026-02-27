@@ -284,6 +284,30 @@ class TestDiscoveryState:
         assert session.customer_name == ""
         assert session.state == State.DISCOVERY
 
+    def test_all_fields_collected_emits_urgency_question(self, sm, session):
+        """When all fields known, canned speak should include urgency question."""
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC blowing warm air"
+        session.service_address = "4210 South Lamar Blvd"
+        action = sm.process(session, "")
+        assert session.state == State.URGENCY
+        assert action.needs_llm is False
+        assert "today" in action.speak.lower()
+
+    def test_all_fields_with_callback_promise_includes_ack(self, sm, session):
+        """When callback promise exists, canned speak should acknowledge it."""
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC blowing warm air"
+        session.service_address = "4210 South Lamar Blvd"
+        session.callback_promise = {"date": "today", "issue": "being really loud"}
+        action = sm.process(session, "")
+        assert session.state == State.URGENCY
+        assert "callback" in action.speak.lower()
+        assert "being really loud" in action.speak.lower()
+        assert "today" in action.speak.lower()  # urgency question still present
+
     def test_high_ticket_detected_in_discovery(self, sm, session):
         session.state = State.DISCOVERY
         session.customer_name = "Jonas"
@@ -301,6 +325,31 @@ class TestDiscoveryState:
         action = sm.process(session, "")
         assert session.service_address == ""
         assert session.state == State.DISCOVERY
+
+
+class TestDiscoverySkipWhenComplete:
+    """DISCOVERY should skip LLM when all fields are pre-populated."""
+
+    def test_all_fields_known_skips_llm(self, sm, session):
+        """Returning caller: name, problem, address all from lookup -> skip LLM."""
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC blowing cold air"
+        session.service_address = "3711 Fortitude Road"
+        action = sm.process(session, "Having a problem with my AC")
+        assert session.state == State.URGENCY
+        assert action.needs_llm is False
+        assert action.speak.startswith("Got it.")
+        assert "today" in action.speak.lower()  # urgency question included
+
+    def test_missing_address_still_uses_llm(self, sm, session):
+        """Name and problem known, but no address -> LLM asks for address."""
+        session.state = State.DISCOVERY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC blowing cold air"
+        action = sm.process(session, "Having a problem")
+        assert session.state == State.DISCOVERY
+        assert action.needs_llm is True
 
 
 # --- URGENCY state ---
@@ -370,6 +419,25 @@ class TestUrgencyState:
         session.has_appointment = False
         action = sm.process(session, "Can I reschedule for something later?")
         assert session.state == State.URGENCY  # no appointment, no redirect
+
+
+class TestUrgencyAdditionalKeywords:
+    """Additional urgency keywords for STT resilience."""
+
+    @pytest.mark.parametrize("text", [
+        "I need someone immediately",
+        "Earliest available please",
+        "This is urgent",
+        "soon as possible",
+    ])
+    def test_additional_urgency_words(self, sm, session, text):
+        session.state = State.URGENCY
+        session.customer_name = "Jonas"
+        session.problem_description = "AC issue"
+        session.service_address = "3711 Fortitude Road"
+        sm.process(session, text)
+        assert session.state == State.PRE_CONFIRM
+        assert session.urgency_tier == "urgent"
 
 
 # --- PRE_CONFIRM state ---
@@ -467,12 +535,107 @@ class TestBookingFailedState:
 
 class TestConfirmState:
     def test_ends_call(self, sm, session):
+        """Legacy test: CONFIRM still eventually ends the call."""
         session.state = State.CONFIRM
+        session.booking_confirmed = True
+        # First turn: does NOT end call
         action = sm.process(session, "")
+        # Second turn: ends call
+        session.agent_has_responded = True
+        action = sm.process(session, "no thanks")
         assert action.end_call is True
 
 
+class TestConfirmTwoTurn:
+    """CONFIRM should NOT end_call on first turn — only after caller responds."""
+
+    def test_confirm_first_turn_does_not_end_call(self, sm, session):
+        """First turn in CONFIRM: agent confirms appointment."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        action = sm.process(session, "")
+        assert action.end_call is False
+        assert action.needs_llm is True
+
+    def test_confirm_second_turn_ends_call_with_canned_close(self, sm, session):
+        """Second turn: caller says 'no thanks' -> canned close, no LLM."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        # First turn
+        sm.process(session, "")
+        session.agent_has_responded = True
+        # Second turn: common close signal
+        action = sm.process(session, "No, that's all. Thanks.")
+        assert action.end_call is True
+        assert action.needs_llm is False
+        assert "stay cool" in action.speak.lower() or "thanks for calling" in action.speak.lower()
+
+    def test_confirm_second_turn_question_uses_llm(self, sm, session):
+        """Second turn: caller asks a question -> use LLM."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "How much does the diagnostic cost?")
+        assert action.end_call is True
+        assert action.needs_llm is True
+
+
 # --- CALLBACK state ---
+
+
+class TestConfirmCloseSignalBoundary:
+    """'no'/'nope'/'nah' are ambiguous after 'Anything else?' — must route to LLM, not canned close."""
+
+    def test_bare_no_routes_to_llm(self, sm, session):
+        """'No' alone should route to LLM (caller may continue), but still end call."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "No.")
+        assert action.needs_llm is True
+        assert action.end_call is True
+        assert action.speak == ""
+
+    def test_nope_routes_to_llm(self, sm, session):
+        """'Nope' alone should route to LLM."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "Nope.")
+        assert action.needs_llm is True
+
+    def test_thanks_still_triggers_canned_close(self, sm, session):
+        """'Thanks' is unambiguous — should still trigger canned close."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "Thanks!")
+        assert action.end_call is True
+        assert action.needs_llm is False
+
+    def test_goodbye_still_triggers_canned_close(self, sm, session):
+        """'Goodbye' is unambiguous — should still trigger canned close."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "Goodbye.")
+        assert action.end_call is True
+        assert action.needs_llm is False
+
+    def test_nothing_else_still_triggers_canned_close(self, sm, session):
+        """'Nothing else' is unambiguous — should still trigger canned close."""
+        session.state = State.CONFIRM
+        session.booking_confirmed = True
+        sm.process(session, "")
+        session.agent_has_responded = True
+        action = sm.process(session, "Nothing else, thanks.")
+        assert action.end_call is True
+        assert action.needs_llm is False
 
 class TestCallbackState:
     def test_fires_callback_tool(self, sm, session):
