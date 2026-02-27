@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { reconcileDynamicVariables } from '../../extraction/reconcile-dynvars.js';
+import { analyzeBookingToolTrace, parseBookingToolResultContent } from '../../extraction/booking-tool-result.js';
 import type { ConversationState } from '../../types/retell.js';
 
 function makeState(overrides?: Partial<ConversationState>): ConversationState {
@@ -68,5 +69,128 @@ describe('backfillBookingAttempted', () => {
         (entry.name === 'book_service' || entry.name === 'book_appointment')
     );
     expect(detected).toBe(false);
+  });
+});
+
+describe('parseBookingToolResultContent', () => {
+  it('parses legacy booked=true shape', () => {
+    const parsed = parseBookingToolResultContent(
+      JSON.stringify({
+        booked: true,
+        appointment_date: 'Friday, February 27',
+        appointment_time: '3:45 PM',
+      })
+    );
+
+    expect(parsed).toEqual({
+      booked: true,
+      appointmentDateTime: 'Friday, February 27 at 3:45 PM',
+    });
+  });
+
+  it('parses booking_confirmed=true alias shape', () => {
+    const parsed = parseBookingToolResultContent(
+      JSON.stringify({
+        success: true,
+        booking_confirmed: true,
+        appointment_time: 'Friday, February 27 at 3:45 PM',
+      })
+    );
+
+    expect(parsed).toEqual({
+      booked: true,
+      appointmentDateTime: 'Friday, February 27 at 3:45 PM',
+    });
+  });
+
+  it('returns null for failed booking result', () => {
+    const parsed = parseBookingToolResultContent(
+      JSON.stringify({ success: true, booked: false })
+    );
+
+    expect(parsed).toBeNull();
+  });
+});
+
+describe('analyzeBookingToolTrace', () => {
+  it('detects urgency mismatch and slot change from transcript tool calls', () => {
+    const entries = [
+      {
+        role: 'tool_call_invocation',
+        tool_call_id: 't1',
+        name: 'transition_to_booking',
+        arguments: JSON.stringify({
+          preferred_time: 'Tomorrow at 4:30 PM',
+          urgency_tier: 'routine',
+        }),
+      },
+      {
+        role: 'tool_call_invocation',
+        tool_call_id: 't2',
+        name: 'book_service',
+        arguments: JSON.stringify({
+          preferred_time: 'Tomorrow at 4:30 PM',
+          urgency_tier: 'urgent',
+        }),
+      },
+      {
+        role: 'tool_call_result',
+        tool_call_id: 't2',
+        successful: true,
+        content: JSON.stringify({
+          booked: true,
+          appointment_date: 'Friday, February 27',
+          appointment_time: '3:45 PM',
+        }),
+      },
+    ];
+
+    const audit = analyzeBookingToolTrace(entries);
+    expect(audit.urgencyMismatch).toBe(true);
+    expect(audit.slotChanged).toBe(true);
+    expect(audit.requestedTime).toBe('Tomorrow at 4:30 PM');
+    expect(audit.bookedSlot).toBe('Friday, February 27 at 3:45 PM');
+  });
+
+  it('does not flag mismatch when urgencies match and no booking result exists', () => {
+    const entries = [
+      {
+        role: 'tool_call_invocation',
+        name: 'transition_to_booking',
+        arguments: JSON.stringify({ preferred_time: 'Soonest available', urgency_tier: 'urgent' }),
+      },
+      {
+        role: 'tool_call_invocation',
+        name: 'book_service',
+        arguments: JSON.stringify({ preferred_time: 'Soonest available', urgency_tier: 'urgent' }),
+      },
+    ];
+
+    const audit = analyzeBookingToolTrace(entries);
+    expect(audit.urgencyMismatch).toBe(false);
+    expect(audit.slotChanged).toBe(false);
+    expect(audit.requestedTime).toBe('Soonest available');
+    expect(audit.bookedSlot).toBeUndefined();
+  });
+
+  it('supports booking_confirmed alias result shape', () => {
+    const entries = [
+      {
+        role: 'tool_call_invocation',
+        tool_call_id: 'b1',
+        name: 'book_service',
+        arguments: JSON.stringify({ preferred_time: 'Tomorrow', urgency_tier: 'routine' }),
+      },
+      {
+        role: 'tool_call_result',
+        tool_call_id: 'b1',
+        successful: true,
+        content: JSON.stringify({ booking_confirmed: true, appointment_time: 'Friday at 3:45 PM' }),
+      },
+    ];
+
+    const audit = analyzeBookingToolTrace(entries);
+    expect(audit.bookedSlot).toBe('Friday at 3:45 PM');
+    expect(audit.slotChanged).toBe(true);
   });
 });

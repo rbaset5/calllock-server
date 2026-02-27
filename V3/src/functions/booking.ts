@@ -131,8 +131,11 @@ async function createCalComBooking(
 
   return {
     success: true,
+    booking_confirmed: true,
+    booked: true,
     appointmentId: data.data.uid,
     confirmationMessage: `Appointment confirmed for ${dateStr} at ${timeStr}`,
+    appointment_time: data.data.startTime,
   };
 }
 
@@ -160,8 +163,11 @@ function generateMockBookingConfirmation(
 
   return {
     success: true,
+    booking_confirmed: true,
+    booked: true,
     appointmentId,
     confirmationMessage: `Appointment confirmed for ${dateStr} at ${timeStr}`,
+    appointment_time: params.dateTime,
   };
 }
 
@@ -177,6 +183,8 @@ export async function updateAppointment(
   // TODO: Integrate with Cal.com reschedule API
   return {
     success: true,
+    booking_confirmed: true,
+    booked: true,
     appointmentId,
     confirmationMessage: "Appointment updated successfully",
   };

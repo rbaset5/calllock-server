@@ -50,6 +50,7 @@ import { buildCallScorecard } from "./extraction/call-scorecard.js";
 import { classifyCall } from "./classification/tags.js";
 import { reconcileDynamicVariables } from "./extraction/reconcile-dynvars.js";
 import { isGhostLead } from "./extraction/ghost-lead.js";
+import { analyzeBookingToolTrace, parseBookingToolResultContent } from "./extraction/booking-tool-result.js";
 
 // ===========================================
 // Test Phone Masking (toggle via MASK_TEST_PHONES env var)
@@ -283,25 +284,21 @@ function extractStateFromPostCallData(callData: RetellPostCallData): Conversatio
 
   // Fallback: detect booking from tool call results when dynamic variables are empty.
   // Retell's collected_dynamic_variables is often empty, but transcript_with_tool_calls
-  // always contains the book_service result with "booked":true and appointment details.
+  // usually contains the book_service result ("booked":true or "booking_confirmed":true).
   if (!appointmentBooked && callData.transcript_with_tool_calls) {
     for (const entry of callData.transcript_with_tool_calls) {
       if (entry.role === "tool_call_result" && entry.successful && entry.content) {
-        try {
-          const result = JSON.parse(entry.content);
-          if (result.booked === true) {
-            appointmentBooked = true;
-            if (result.appointment_date && result.appointment_time) {
-              appointmentDateTime = `${result.appointment_date} at ${result.appointment_time}`;
-            }
-            logger.info(
-              { callId: callData.call_id, appointmentDateTime },
-              "Booking detected from tool call result (dynamic variables were empty)"
-            );
-            break;
+        const parsed = parseBookingToolResultContent(entry.content);
+        if (parsed?.booked) {
+          appointmentBooked = true;
+          if (parsed.appointmentDateTime) {
+            appointmentDateTime = parsed.appointmentDateTime;
           }
-        } catch {
-          // Not JSON or not a booking result - skip
+          logger.info(
+            { callId: callData.call_id, appointmentDateTime },
+            "Booking detected from tool call result (dynamic variables were empty)"
+          );
+          break;
         }
       }
     }
@@ -498,24 +495,19 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
         logger.info({ callId }, "Booking detected from dynamic variables (saved session)");
       }
 
-      // Check 2: Tool call results (scan for booked:true in any tool response)
+      // Check 2: Tool call results (scan for booked:true / booking_confirmed:true)
       if (!conversationState.appointmentBooked && payload.call.transcript_with_tool_calls) {
         for (const entry of payload.call.transcript_with_tool_calls) {
           if (entry.role === "tool_call_result" && entry.successful && entry.content) {
-            try {
-              const result = JSON.parse(entry.content);
-              if (result.booked === true) {
-                conversationState.appointmentBooked = true;
-                if (result.appointment_date && result.appointment_time) {
-                  conversationState.appointmentDateTime =
-                    `${result.appointment_date} at ${result.appointment_time}`;
-                }
-                conversationState.endCallReason = "completed";
-                logger.info({ callId }, "Booking detected from tool call results (saved session)");
-                break;
+            const parsed = parseBookingToolResultContent(entry.content);
+            if (parsed?.booked) {
+              conversationState.appointmentBooked = true;
+              if (parsed.appointmentDateTime) {
+                conversationState.appointmentDateTime = parsed.appointmentDateTime;
               }
-            } catch {
-              // Not JSON or not a booking result — skip
+              conversationState.endCallReason = "completed";
+              logger.info({ callId }, "Booking detected from tool call results (saved session)");
+              break;
             }
           }
         }
@@ -618,6 +610,29 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
       logger.warn(
         { callId, endCallReason: conversationState.endCallReason, lastAgentState: conversationState.lastAgentState },
         "Callback gap — call ended without booking or callback request"
+      );
+    }
+
+    // Booking flow audit signals for observability (schema drift / prompt noncompliance)
+    const bookingAudit = analyzeBookingToolTrace(payload.call.transcript_with_tool_calls);
+    if (bookingAudit.urgencyMismatch) {
+      logger.warn(
+        {
+          callId,
+          transitionUrgencyTier: bookingAudit.transitionUrgencyTier,
+          bookingToolUrgencyTier: bookingAudit.bookingToolUrgencyTier,
+        },
+        "Urgency tier mismatch between transition_to_booking and book_service"
+      );
+    }
+    if (bookingAudit.slotChanged) {
+      logger.warn(
+        {
+          callId,
+          requestedTime: bookingAudit.requestedTime,
+          bookedSlot: bookingAudit.bookedSlot,
+        },
+        "Booked slot differs from caller requested time"
       );
     }
 

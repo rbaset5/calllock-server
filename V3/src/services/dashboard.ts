@@ -7,6 +7,7 @@ import { ConversationState, UrgencyTier, EndCallReason, RetellPostCallData, Reve
 import { createModuleLogger, maskPhone } from "../utils/logger.js";
 import { fetchWithRetry, FetchError } from "../utils/fetch.js";
 import { estimateRevenue, RevenueEstimate } from "./revenue-estimation.js";
+import { analyzeBookingToolTrace } from "../extraction/booking-tool-result.js";
 
 const log = createModuleLogger("dashboard");
 
@@ -76,6 +77,12 @@ export interface DashboardJobPayload {
   // Traffic Controller fields (Phase 3)
   status_color?: "gray" | "green" | "yellow" | "red" | "blue";
   is_archived?: boolean;
+  // Booking audit visibility
+  slot_changed?: boolean;
+  urgency_mismatch?: boolean;
+  booking_requested_time?: string;
+  booking_booked_slot?: string;
+  booking_urgency_transition?: string;
 }
 
 /**
@@ -148,7 +155,8 @@ function calculateStatusColor(state: ConversationState): DashboardJobPayload["st
  */
 function buildAiSummary(
   state: ConversationState,
-  retellData?: RetellPostCallData
+  retellData?: RetellPostCallData,
+  bookingAudit?: ReturnType<typeof analyzeBookingToolTrace>
 ): string {
   const parts: string[] = [];
 
@@ -221,6 +229,31 @@ function buildAiSummary(
     parts.push("🔴 URGENT ESCALATION");
   }
 
+  // Booking audit context (operator-visible alert for prompt/backend drift)
+  if (bookingAudit?.slotChanged || bookingAudit?.urgencyMismatch) {
+    const reviewNotes: string[] = [];
+
+    if (bookingAudit.slotChanged) {
+      if (bookingAudit.requestedTime && bookingAudit.bookedSlot) {
+        reviewNotes.push(`requested ${bookingAudit.requestedTime}; booked ${bookingAudit.bookedSlot}`);
+      } else {
+        reviewNotes.push("alternate slot was booked");
+      }
+    }
+
+    if (bookingAudit.urgencyMismatch) {
+      if (bookingAudit.transitionUrgencyTier && bookingAudit.bookingToolUrgencyTier) {
+        reviewNotes.push(`urgency ${bookingAudit.transitionUrgencyTier}->${bookingAudit.bookingToolUrgencyTier}`);
+      } else {
+        reviewNotes.push("urgency changed during booking");
+      }
+    }
+
+    if (reviewNotes.length > 0) {
+      parts.push(`Review booking: ${reviewNotes.join("; ")}`);
+    }
+  }
+
   return parts.join(" | ") || "No summary available";
 }
 
@@ -256,6 +289,49 @@ function buildSalesLeadTitle(equipmentType?: string, equipmentAge?: string): str
   return `${equipment} Replacement`;
 }
 
+function deriveBookingAudit(
+  retellData?: RetellPostCallData
+): ReturnType<typeof analyzeBookingToolTrace> | undefined {
+  const bookingAudit = analyzeBookingToolTrace(retellData?.transcript_with_tool_calls);
+  const hasBookingAuditData = Boolean(
+    bookingAudit.requestedTime ||
+    bookingAudit.bookedSlot ||
+    bookingAudit.transitionUrgencyTier ||
+    bookingAudit.bookingToolUrgencyTier
+  );
+
+  if (!hasBookingAuditData) {
+    return undefined;
+  }
+
+  return bookingAudit;
+}
+
+function deriveBookingAuditFields(
+  retellData?: RetellPostCallData
+): Pick<
+  DashboardJobPayload,
+  | "slot_changed"
+  | "urgency_mismatch"
+  | "booking_requested_time"
+  | "booking_booked_slot"
+  | "booking_urgency_transition"
+> {
+  const bookingAudit = deriveBookingAudit(retellData);
+  if (!bookingAudit) return {};
+
+  return {
+    slot_changed: bookingAudit.slotChanged,
+    urgency_mismatch: bookingAudit.urgencyMismatch,
+    booking_requested_time: bookingAudit.requestedTime,
+    booking_booked_slot: bookingAudit.bookedSlot,
+    booking_urgency_transition:
+      bookingAudit.transitionUrgencyTier && bookingAudit.bookingToolUrgencyTier
+        ? `${bookingAudit.transitionUrgencyTier}->${bookingAudit.bookingToolUrgencyTier}`
+        : undefined,
+  };
+}
+
 /**
  * Transform conversation state to dashboard payload
  */
@@ -273,6 +349,8 @@ export function transformToDashboardPayload(
 
   // Get midpoint value for backwards compatibility
   const estimatedValue = getMidpointValue(estimate.tier);
+  const bookingAudit = deriveBookingAudit(retellData);
+  const bookingAuditFields = deriveBookingAuditFields(retellData);
 
   return {
     customer_name: state.customerName || state.customerPhone || "Unknown Caller",
@@ -280,7 +358,7 @@ export function transformToDashboardPayload(
     customer_address: state.serviceAddress || "Not provided",
     service_type: "hvac", // Always HVAC for this system
     urgency: mapUrgencyToDashboard(state.urgencyTier, state.endCallReason, state.callerType, state.isCallbackComplaint),
-    ai_summary: buildAiSummary(state, retellData),
+    ai_summary: buildAiSummary(state, retellData, bookingAudit),
     scheduled_at: state.appointmentDateTime,
     call_transcript: retellData?.transcript,
     transcript_object: retellData?.transcript_object,  // Structured transcript with speaker labels
@@ -316,6 +394,7 @@ export function transformToDashboardPayload(
     is_callback_complaint: state.isCallbackComplaint,
     // Status color for visual priority strips
     status_color: calculateStatusColor(state),
+    ...bookingAuditFields,
   };
 }
 
@@ -470,6 +549,11 @@ export interface DashboardCallPayload {
   transcript_object?: TranscriptMessage[];  // Structured transcript with speaker labels
   job_id?: string;
   lead_id?: string;
+  slot_changed?: boolean;
+  urgency_mismatch?: boolean;
+  booking_requested_time?: string;
+  booking_booked_slot?: string;
+  booking_urgency_transition?: string;
   user_email: string;
 }
 
@@ -516,6 +600,7 @@ export async function sendCallToDashboard(
     revenue_tier_label: estimate.tierLabel,
     revenue_tier_signals: estimate.signals,
     transcript_object: retellData?.transcript_object,  // Structured transcript with speaker labels
+    ...deriveBookingAuditFields(retellData),
     user_email: DASHBOARD_USER_EMAIL!,
   };
 

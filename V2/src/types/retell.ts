@@ -187,6 +187,8 @@ export interface BookAppointmentParams {
 export interface BookAppointmentResult {
   success: boolean;
   booking_confirmed: boolean;
+  /** Compatibility alias used by some prompts/backends */
+  booked?: boolean;
   appointmentId?: string;
   confirmationMessage: string;
   appointment_time?: string;  // ISO 8601 datetime from Cal.com

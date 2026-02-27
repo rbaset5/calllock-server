@@ -190,8 +190,12 @@ export interface BookAppointmentParams {
 
 export interface BookAppointmentResult {
   success: boolean;
+  /** Compatibility flags for prompts/backends that check either key */
+  booking_confirmed?: boolean;
+  booked?: boolean;
   appointmentId?: string;
   confirmationMessage: string;
+  appointment_time?: string;
 }
 
 export interface ValidateServiceAreaParams {
@@ -336,6 +340,17 @@ export interface RetellPostCallData {
   call_analysis?: RetellCallAnalysis;
   metadata?: Record<string, unknown>;
   disconnection_reason?: string;
+  /** Full transcript including tool call invocations and results (if enabled) */
+  transcript_with_tool_calls?: ToolCallEntry[];
+}
+
+export interface ToolCallEntry {
+  role: "agent" | "user" | "tool_call_invocation" | "tool_call_result";
+  content?: string;
+  tool_call_id?: string;
+  name?: string;
+  arguments?: string;
+  successful?: boolean;
 }
 
 /**

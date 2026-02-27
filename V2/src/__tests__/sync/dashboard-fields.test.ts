@@ -166,3 +166,89 @@ describe('quality_score persistence (#39)', () => {
     expect(state.qualityScore).toBeUndefined();
   });
 });
+
+describe('booking audit flags in dashboard payload', () => {
+  it('surfaces slot_changed and urgency_mismatch when booking trace shows drift', () => {
+    const state = makeState({ bookingAttempted: true, appointmentBooked: true });
+    const retellData = {
+      transcript_with_tool_calls: [
+        {
+          role: 'tool_call_invocation',
+          name: 'transition_to_booking',
+          arguments: JSON.stringify({
+            preferred_time: 'Tomorrow at 4:30 PM',
+            urgency_tier: 'routine',
+          }),
+        },
+        {
+          role: 'tool_call_invocation',
+          name: 'book_service',
+          tool_call_id: 'book1',
+          arguments: JSON.stringify({
+            preferred_time: 'Tomorrow at 4:30 PM',
+            urgency_tier: 'urgent',
+          }),
+        },
+        {
+          role: 'tool_call_result',
+          tool_call_id: 'book1',
+          successful: true,
+          content: JSON.stringify({
+            booked: true,
+            appointment_date: 'Friday, February 27, 2026',
+            appointment_time: '3:45 PM',
+          }),
+        },
+      ],
+    } as unknown as RetellPostCallData;
+
+    const payload = transformToDashboardPayload(state, retellData);
+    expect(payload.slot_changed).toBe(true);
+    expect(payload.urgency_mismatch).toBe(true);
+    expect(payload.booking_requested_time).toBe('Tomorrow at 4:30 PM');
+    expect(payload.booking_booked_slot).toBe('Friday, February 27, 2026 at 3:45 PM');
+    expect(payload.booking_urgency_transition).toBe('routine->urgent');
+  });
+
+  it('surfaces false flags when booking trace is present but consistent', () => {
+    const state = makeState({ bookingAttempted: true, appointmentBooked: true });
+    const retellData = {
+      transcript_with_tool_calls: [
+        {
+          role: 'tool_call_invocation',
+          name: 'transition_to_booking',
+          arguments: JSON.stringify({
+            preferred_time: 'Friday, February 27, 2026 at 3:45 PM',
+            urgency_tier: 'urgent',
+          }),
+        },
+        {
+          role: 'tool_call_invocation',
+          name: 'book_service',
+          tool_call_id: 'book2',
+          arguments: JSON.stringify({
+            preferred_time: 'Friday, February 27, 2026 at 3:45 PM',
+            urgency_tier: 'urgent',
+          }),
+        },
+        {
+          role: 'tool_call_result',
+          tool_call_id: 'book2',
+          successful: true,
+          content: JSON.stringify({
+            booking_confirmed: true,
+            appointment_date: 'Friday, February 27, 2026',
+            appointment_time: '3:45 PM',
+          }),
+        },
+      ],
+    } as unknown as RetellPostCallData;
+
+    const payload = transformToDashboardPayload(state, retellData);
+    expect(payload.slot_changed).toBe(false);
+    expect(payload.urgency_mismatch).toBe(false);
+    expect(payload.booking_requested_time).toBe('Friday, February 27, 2026 at 3:45 PM');
+    expect(payload.booking_booked_slot).toBe('Friday, February 27, 2026 at 3:45 PM');
+    expect(payload.booking_urgency_transition).toBe('urgent->urgent');
+  });
+});

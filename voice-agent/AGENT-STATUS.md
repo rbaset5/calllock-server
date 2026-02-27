@@ -7,6 +7,7 @@
 - Retell Phone Number Version: 79 (bound to +13126463816)
 - Retell Published Version: 79
 - Agent Name: CallSeal - 8 State v6
+- Note (2026-02-26): Retell agent display name is stale (`v6`) and does **not** reflect the active prompt config. Audit behavior and deployed config should be verified from state names / manifest, not label text.
 - Deployment status: LIVE — v10 simplified (10 states). v9 fallback: retell-llm-v9-triage.json
 - Backchannel: Enabled (frequency 0.6)
 - Interruption Sensitivity: 0.5 (agent-level), per-state overrides below

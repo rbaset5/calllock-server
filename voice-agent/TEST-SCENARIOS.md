@@ -116,6 +116,29 @@ State reference:
 
 ---
 
+## 16) Regression — Returning Caller + Existing Appointment + Slot Substitution (v10-simplified)
+**Reference:** Mirrors failure pattern from `call_c80d24d2f11780aee2c1290d665` on **February 26, 2026**
+**Path (v10 simplified):** welcome → lookup → safety → service_area → discovery → confirm → booking → done
+**Caller:** Returning caller. "I need HVAC service tomorrow at 4:30 PM."
+**Backend setup:** `lookup_caller` returns an existing upcoming appointment (for example, Thursday, February 26, 2026 at 2:00 PM). `book_service` returns a different slot (for example, Friday, February 27, 2026 at 3:45 PM).
+**Expected (UX):**
+- Agent acknowledges existing appointment from lookup before booking a new one (or explicitly offers reschedule/cancel path).
+- Agent gets one clear booking approval (no duplicate "ready to proceed?" after an explicit yes).
+- If `book_service` returns a different slot than requested, agent says the exact booked slot and asks for caller acceptance before final confirmation.
+- Agent does not present alternate slot as already accepted.
+**Expected (Engineering / State):**
+- `urgency_tier` remains consistent from confirm/transition into `book_service` (no silent `routine` → `urgent` drift).
+- Booking success handling works with either `{"booked": true}` or `{"booking_confirmed": true}`.
+- Post-call/dashboard payload includes booking audit signals:
+  - `slot_changed`
+  - `urgency_mismatch`
+  - `booking_requested_time`
+  - `booking_booked_slot`
+  - `booking_urgency_transition`
+- Dashboard summary text includes a review note when slot/urgency drift occurs.
+
+---
+
 ## Validation Checklist
 
 For each test call, verify:
@@ -127,3 +150,7 @@ For each test call, verify:
 - [ ] Urgency state has NO tools (edges only)
 - [ ] Safety state has NO tools (edges only)
 - [ ] Customer data (name, address, ZIP) flows through transitions without re-asking
+- [ ] If backend books a different slot than requested, agent asks for acceptance before final confirmation
+- [ ] No duplicate booking approval question after caller has already approved (for example, no extra "ready to proceed?")
+- [ ] Dashboard payload includes booking audit flags/details when booking trace exists (`slot_changed`, `urgency_mismatch`, `booking_requested_time`, `booking_booked_slot`, `booking_urgency_transition`)
+- [ ] Dashboard card/summary includes a booking review note when slot or urgency drift occurs

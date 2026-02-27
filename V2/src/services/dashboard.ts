@@ -10,6 +10,7 @@ import { estimateRevenue, RevenueEstimate } from "./revenue-estimation.js";
 import { detectPriority, PriorityColor } from "./priority-detection.js";
 import { classifyCall, TaxonomyTags } from "../classification/tags.js";
 import { mapUrgencyToDashboard } from "../classification/call-type.js";
+import { analyzeBookingToolTrace } from "../extraction/booking-tool-result.js";
 
 const log = createModuleLogger("dashboard");
 
@@ -112,6 +113,12 @@ export interface DashboardJobPayload {
   card_summary?: string;
   // V11: Booking status tri-state
   booking_status?: 'confirmed' | 'attempted_failed' | 'not_requested';
+  // V12: Booking audit flags for slot substitution / urgency drift visibility
+  slot_changed?: boolean;
+  urgency_mismatch?: boolean;
+  booking_requested_time?: string;
+  booking_booked_slot?: string;
+  booking_urgency_transition?: string;
 }
 
 // mapUrgencyToDashboard moved to classification/call-type.ts
@@ -401,7 +408,8 @@ function buildCardHeadline(
  */
 function buildCardSummary(
   state: ConversationState,
-  urgency?: string
+  urgency?: string,
+  bookingAudit?: ReturnType<typeof analyzeBookingToolTrace>
 ): string | undefined {
   const parts: string[] = [];
 
@@ -429,6 +437,31 @@ function buildCardSummary(
     parts.push("Flagged as emergency.");
   } else if (urgency === "high") {
     parts.push("Flagged as urgent.");
+  }
+
+  // Booking audit context (operator-visible alert for prompt/backend drift)
+  if (bookingAudit?.slotChanged || bookingAudit?.urgencyMismatch) {
+    const reviewNotes: string[] = [];
+
+    if (bookingAudit.slotChanged) {
+      if (bookingAudit.requestedTime && bookingAudit.bookedSlot) {
+        reviewNotes.push(`requested ${bookingAudit.requestedTime}; booked ${bookingAudit.bookedSlot}`);
+      } else {
+        reviewNotes.push("alternate slot was booked");
+      }
+    }
+
+    if (bookingAudit.urgencyMismatch) {
+      if (bookingAudit.transitionUrgencyTier && bookingAudit.bookingToolUrgencyTier) {
+        reviewNotes.push(`urgency ${bookingAudit.transitionUrgencyTier}->${bookingAudit.bookingToolUrgencyTier}`);
+      } else {
+        reviewNotes.push("urgency changed during booking");
+      }
+    }
+
+    if (reviewNotes.length > 0) {
+      parts.push(`Review booking: ${reviewNotes.join("; ")}.`);
+    }
   }
 
   if (parts.length === 0) {
@@ -464,6 +497,47 @@ function extractEquipmentTypeFromTranscript(transcript?: string): string | undef
     if (regex.test(text)) return type;
   }
   return undefined;
+}
+
+function deriveBookingAudit(retellData?: RetellPostCallData): ReturnType<typeof analyzeBookingToolTrace> | undefined {
+  const bookingAudit = analyzeBookingToolTrace(retellData?.transcript_with_tool_calls);
+  const hasBookingAuditData = Boolean(
+    bookingAudit.requestedTime ||
+    bookingAudit.bookedSlot ||
+    bookingAudit.transitionUrgencyTier ||
+    bookingAudit.bookingToolUrgencyTier
+  );
+
+  if (!hasBookingAuditData) {
+    return undefined;
+  }
+
+  return bookingAudit;
+}
+
+function deriveBookingAuditFields(
+  retellData?: RetellPostCallData
+): Pick<
+  DashboardJobPayload,
+  | "slot_changed"
+  | "urgency_mismatch"
+  | "booking_requested_time"
+  | "booking_booked_slot"
+  | "booking_urgency_transition"
+> {
+  const bookingAudit = deriveBookingAudit(retellData);
+  if (!bookingAudit) return {};
+
+  return {
+    slot_changed: bookingAudit.slotChanged,
+    urgency_mismatch: bookingAudit.urgencyMismatch,
+    booking_requested_time: bookingAudit.requestedTime,
+    booking_booked_slot: bookingAudit.bookedSlot,
+    booking_urgency_transition:
+      bookingAudit.transitionUrgencyTier && bookingAudit.bookingToolUrgencyTier
+        ? `${bookingAudit.transitionUrgencyTier}->${bookingAudit.bookingToolUrgencyTier}`
+        : undefined,
+  };
 }
 
 /**
@@ -512,8 +586,10 @@ export function transformToDashboardPayload(
     || extractEquipmentTypeFromTranscript(retellData?.transcript)
     || equipmentFromSubtype;
   const dashboardUrgency = mapUrgencyToDashboard({ urgencyTier: state.urgencyTier, urgencyLevel: state.urgency, endCallReason: state.endCallReason });
+  const bookingAudit = deriveBookingAudit(retellData);
+  const bookingAuditFields = deriveBookingAuditFields(retellData);
   const cardHeadline = buildCardHeadline(state, tags, equipType, dashboardUrgency);
-  const cardSummary = buildCardSummary(state, dashboardUrgency);
+  const cardSummary = buildCardSummary(state, dashboardUrgency, bookingAudit);
 
   // For sales leads, create a descriptive title from equipment info
   const issueDescription = state.endCallReason === "sales_lead"
@@ -599,6 +675,7 @@ export function transformToDashboardPayload(
       : state.bookingAttempted
         ? 'attempted_failed'
         : 'not_requested',
+    ...bookingAuditFields,
   };
 }
 
@@ -714,6 +791,12 @@ export interface DashboardCallPayload {
   sentiment?: string;
   // V11: Quality scorecard (#39)
   quality_score?: number;
+  // V12: Booking audit flags
+  slot_changed?: boolean;
+  urgency_mismatch?: boolean;
+  booking_requested_time?: string;
+  booking_booked_slot?: string;
+  booking_urgency_transition?: string;
   user_email: string;
 }
 
@@ -747,6 +830,7 @@ export async function sendCallToDashboard(
   const callPhoneFromRetell = retellData?.direction === "inbound"
     ? retellData?.from_number
     : retellData?.to_number;
+  const bookingAuditFields = deriveBookingAuditFields(retellData);
 
   const payload: DashboardCallPayload = {
     call_id: state.callId,
@@ -787,6 +871,7 @@ export async function sendCallToDashboard(
     sentiment: retellData?.call_analysis?.user_sentiment,
     // V11: Quality scorecard (#39)
     quality_score: state.qualityScore,
+    ...bookingAuditFields,
     user_email: DASHBOARD_USER_EMAIL!,
   };
 

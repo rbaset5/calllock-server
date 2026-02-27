@@ -27,6 +27,7 @@ import {
 } from "./functions/index.js";
 import { sendEmergencyAlert, sendSalesLeadAlert } from "./services/alerts.js";
 import { getCustomerHistory } from "./services/customer-history.js";
+import { analyzeBookingToolTrace } from "./extraction/booking-tool-result.js";
 
 // Infrastructure imports
 import { logger, maskPhone } from "./utils/logger.js";
@@ -347,6 +348,29 @@ app.post("/webhook/retell/call-ended", async (req: Request, res: Response) => {
         );
         conversationState.endCallReason = mappedReason;
       }
+    }
+
+    // Booking flow audit signals for observability (schema drift / prompt noncompliance)
+    const bookingAudit = analyzeBookingToolTrace(payload.call.transcript_with_tool_calls);
+    if (bookingAudit.urgencyMismatch) {
+      logger.warn(
+        {
+          callId,
+          transitionUrgencyTier: bookingAudit.transitionUrgencyTier,
+          bookingToolUrgencyTier: bookingAudit.bookingToolUrgencyTier,
+        },
+        "Urgency tier mismatch between transition_to_booking and book_service"
+      );
+    }
+    if (bookingAudit.slotChanged) {
+      logger.warn(
+        {
+          callId,
+          requestedTime: bookingAudit.requestedTime,
+          bookedSlot: bookingAudit.bookedSlot,
+        },
+        "Booked slot differs from caller requested time"
+      );
     }
 
     // V3 TRAFFIC CONTROLLER - Route solicitations/vendors to "Spam Folder"
